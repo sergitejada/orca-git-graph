@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 1,
+  "id": "git-graph",
+  "publisher": "sergitejada",
+  "name": "Git Graph",
+  "version": "0.1.0",
+  "description": "Grafo de commits y ramas del worktree activo en la sidebar, al estilo de Visual Studio.",
+  "engines": { "orca": ">=1.4.0" },
+  "pluginApi": 1,
+  "main": "main.mjs",
+  "contributes": {
+    "panels": [{ "id": "graph", "title": "Git Graph", "icon": "activity", "entry": "panel.html" }],
+    "commands": [{ "id": "git-graph-refresh", "title": "Git Graph: Refrescar" }],
+    "events": [{ "on": "agent.status.changed" }, { "on": "worktree.created" }]
+  },
+  "capabilities": [{ "kind": "storage" }, { "kind": "events:subscribe" }]
+}

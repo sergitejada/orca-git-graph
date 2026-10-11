@@ -1,0 +1,14 @@
+{
+  "name": "orca-git-graph",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Orca plugin: commit and branch graph of the active worktree in the right sidebar.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test",
+    "render": "node render.mjs",
+    "reset": "node render.mjs --reset"
+  }
+}
