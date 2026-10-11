@@ -11,6 +11,7 @@ Plugin de [Orca](https://github.com/stablyai/orca) que añade a la sidebar derec
 - Muestra ramas locales, remotas, tags y HEAD (`git log --branches --remotes --tags HEAD`), sin refs internas como checkpoints de agentes.
 - Búsqueda por mensaje completo, autor, email, hash, refs y rutas sin confirmar. `/` enfoca el buscador.
 - Filtros por rama, autor y merges; la rama incluye sus antepasados dentro del historial cargado. Los commits que no coinciden se atenúan para conservar las conexiones reales del grafo.
+- Selector de ramas siempre visible, con búsqueda de ramas locales y remotas y la opción **Todas las ramas**. Se puede usar con `↑`/`↓`, `Enter` y `Esc`.
 - Selección de commits con detalles: mensaje completo, autor, fecha, hash copiable y navegación a sus padres.
 - Detalles de los cambios sin confirmar, con todos los ficheros y su estado.
 - El repositorio sigue al proyecto y worktree seleccionados en Orca, aunque no haya agentes trabajando.

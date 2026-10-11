@@ -3,6 +3,7 @@ import type { Change, PanelData, PanelRefs, PanelRow } from './types.js'
 import { ROW, LANE, PAD, GREY, color } from './graph-style.js'
 import { branchesOf, emptyFilters, findMatches } from './explore.js'
 import { Details } from './details.js'
+import { BranchSelector } from './branch-selector.js'
 
 const x = (lane: number) => PAD + lane * LANE
 const curve = (x1: number, y1: number, x2: number, y2: number) => {
@@ -43,7 +44,7 @@ function Graph({ rows, head, matches }: { rows: PanelRow[]; head: string; matche
 
     const hollow = row.commit.wip || (row.commit.hash === head && wipLane < 0)
     const dotColor = row.commit.wip ? GREY : color(row.col)
-    dots.push(<circle key={`d${index}`} cx={cx} cy={middle} r="4" opacity={matches.has(row.commit.hash) ? 1 : 0.3} fill={hollow ? 'var(--background, #171717)' : dotColor} stroke={hollow ? dotColor : undefined} strokeWidth={hollow ? 1.5 : undefined} />)
+    dots.push(<circle key={`d${index}`} cx={cx} cy={middle} r="4" opacity={matches.has(row.commit.hash) ? 1 : 0.3} fill={hollow ? 'var(--panel-background)' : dotColor} stroke={hollow ? dotColor : undefined} strokeWidth={hollow ? 1.5 : undefined} />)
   })
 
   return <svg className="graph" width={width} height={rows.length * ROW} viewBox={`0 0 ${width} ${rows.length * ROW}`} fill="none" strokeWidth="2" strokeLinecap="round" aria-hidden="true">{paths}{dots}</svg>
@@ -166,6 +167,7 @@ export function Panel({ repo, branch, head, rows, refsByCommit, now, error }: Pa
     {error ? <div className="error">{error}</div> : null}
     {!error && !rows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
     {rows.length ? <>
+      <div className="branch-toolbar"><BranchSelector branches={branches} value={filters.branch} onChange={branch => setFilters({ ...filters, branch })} /></div>
       <div className="toolbar" aria-label="Explorar historial">
         <input ref={searchInput} type="search" aria-label="Buscar commits" placeholder="Buscar mensaje, autor, hash… (/)" value={filters.query} onChange={event => setFilters({ ...filters, query: event.target.value })} />
         <button type="button" aria-expanded={showFilters} onClick={() => setShowFilters(!showFilters)}>Filtros{filterCount ? ` (${filterCount})` : ''}</button>
@@ -173,7 +175,6 @@ export function Panel({ repo, branch, head, rows, refsByCommit, now, error }: Pa
         {filtered ? <button type="button" onClick={() => setFilters(emptyFilters)}>Limpiar</button> : null}
       </div>
       {showFilters ? <div className="filter-options">
-        <label>Rama<select aria-label="Filtrar por rama" value={filters.branch} onChange={event => setFilters({ ...filters, branch: event.target.value })}><option value="">Todas las ramas</option>{branches.map(name => <option key={name} value={name}>{name}</option>)}</select></label>
         <label>Autor<select aria-label="Filtrar por autor" value={filters.author} onChange={event => setFilters({ ...filters, author: event.target.value })}><option value="">Todos los autores</option>{authors.map(name => <option key={name} value={name}>{name}</option>)}</select></label>
         <label className="merge-filter"><input type="checkbox" checked={filters.mergesOnly} onChange={event => setFilters({ ...filters, mergesOnly: event.target.checked })} />Solo merges</label>
       </div> : null}
@@ -181,7 +182,7 @@ export function Panel({ repo, branch, head, rows, refsByCommit, now, error }: Pa
       {filtered && !matchingRows.length ? <div className="hint no-matches">Sin coincidencias. Cambia la búsqueda o limpia los filtros.</div> : null}
       <div className={`workspace${selected ? ' details-open' : ''}`}>
       <div className="graph-list"><table onKeyDown={tableKeyDown} aria-label="Historial de commits">
-      <thead><tr><th className="graph" style={{ minWidth: Math.max(28, 2 * PAD + (Math.max(1, ...rows.map(row => Math.max(row.before.length, row.after.length))) - 1) * LANE) }}>Grafo</th><th className="desc">Descripción</th><th className="date">Fecha</th><th className="author">Autor</th><th className="hash">Commit</th></tr></thead>
+      <thead><tr><th className="graph" style={{ minWidth: 12 + Math.max(28, 2 * PAD + (Math.max(1, ...rows.map(row => Math.max(row.before.length, row.after.length))) - 1) * LANE) }}>Grafo</th><th className="desc">Descripción</th><th className="date">Fecha</th><th className="author">Autor</th><th className="hash">Commit</th></tr></thead>
       <tbody>{rows.map((row, index) => <CommitRow key={row.commit.hash || index} row={row} head={head} refs={refsByCommit[row.commit.hash] || { heads: [], remotes: [], tags: [] }} graphRows={index === 0 ? rows : null} matches={matches} selected={selectedHash === row.commit.hash} focusable={focusHash === row.commit.hash} onSelect={selectHash} onRowRef={element => { if (element) rowElements.current.set(row.commit.hash, element); else rowElements.current.delete(row.commit.hash) }} />)}</tbody>
       </table></div>
       {selected ? <Details key={selected.commit.hash} row={selected} loadedHashes={loadedHashes} onClose={() => { setSelectedHash(null); rowElements.current.get(selected.commit.hash)?.focus({ preventScroll: true }) }} onJump={selectHash} /> : null}
