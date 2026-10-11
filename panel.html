@@ -8,61 +8,76 @@
   body {
     margin: 0;
     font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-    font-size: 12px;
-    color: var(--foreground, #ddd);
-    background: var(--background, transparent);
+    font-size: 13px;
+    color: var(--foreground, #ccc);
+    background: var(--background, #1e1e1e);
   }
   header {
-    position: sticky; top: 0; z-index: 1;
-    padding: 8px 10px;
-    background: var(--background, #1e1e1e);
-    border-bottom: 1px solid var(--border, #333);
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+    padding: 7px 10px; font-size: 12px;
   }
-  .branch { font-weight: 600; font-size: 13px; }
-  .sub { color: var(--muted-foreground, #999); margin-top: 2px; font-size: 11px; }
+  header .label { color: var(--muted-foreground, #999); }
+  header .sub { margin-left: auto; color: var(--muted-foreground, #999); font-size: 11px; }
   .error { color: #E57373; padding: 10px; white-space: pre-wrap; }
   .hint { color: var(--muted-foreground, #999); padding: 10px; line-height: 1.5; }
-  .body { display: flex; align-items: flex-start; padding-top: 4px; }
-  .graph { flex: none; display: block; }
-  .list { flex: 1; min-width: 0; }
-  .row {
-    height: 24px; display: flex; align-items: center; gap: 6px;
-    padding-right: 10px; white-space: nowrap; overflow: hidden;
-    border-radius: 4px;
+  table { width: 100%; border-collapse: separate; border-spacing: 0; }
+  th {
+    position: sticky; top: 0; z-index: 2;
+    height: 26px; padding: 0 10px; white-space: nowrap;
+    font-weight: 700; text-align: center;
+    background: var(--background, #1e1e1e);
+    border-top: 1px solid rgba(128,128,128,.35); border-bottom: 1px solid rgba(128,128,128,.35);
   }
-  .row:hover { background: var(--accent, rgba(127,127,127,.15)); }
-  .row.is-head .subject { font-weight: 600; }
-  .row.wip .subject { font-style: italic; color: var(--muted-foreground, #999); }
-  .more { flex: none; color: var(--muted-foreground, #999); font-size: 10.5px; }
+  th + th { border-left: 1px solid rgba(128,128,128,.35); }
+  td { height: 24px; padding: 0 6px; white-space: nowrap; }
+  td.graph { position: relative; padding: 0; vertical-align: top; }
+  td.graph .graph { position: absolute; top: 0; left: 0; z-index: 1; pointer-events: none; }
+  td.desc { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; padding-left: 4px; }
+  td.date, td.author, td.hash { padding: 0 6px; }
+  tbody tr:hover td { background: rgba(128,128,128,.15); }
+  .head-dot {
+    display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: middle;
+    border: 2px solid; border-radius: 50%;
+  }
   .ref {
-    flex: 0 1 auto; min-width: 28px; max-width: 30%; overflow: hidden; text-overflow: ellipsis;
-    padding: 0 6px; line-height: 16px; border-radius: 8px; font-size: 10.5px; font-weight: 600;
-    border: 1px solid currentColor;
+    display: inline-flex; height: 18px; margin-right: 5px; vertical-align: middle;
+    border: 1px solid rgba(128,128,128,.75); border-radius: 4px; overflow: hidden;
+    background: rgba(128,128,128,.12); font-size: 12px; line-height: 16px;
   }
-  .ref.head { color: #66BB6A; }
-  .ref.branch { color: #FF8A65; }
-  .ref.remote { color: #90A4AE; }
-  .ref.tag { color: #FFD54F; }
-  .subject { flex: 1 0 35%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .meta { flex: none; color: var(--muted-foreground, #999); font-size: 11px; }
+  .ref .ico { display: flex; align-items: center; padding: 0 4px; }
+  .ref .ico svg { height: 12px; width: auto; fill: #fff; }
+  .ref .name { padding: 0 5px; }
+  .ref.active .name { font-weight: 700; }
+  .ref .remote { padding: 0 5px; font-style: italic; border-left: 1px solid rgba(128,128,128,.75); }
+  .subject { vertical-align: middle; }
+  @media (max-width: 560px) { .author { display: none; } }
+  @media (max-width: 440px) { .date { display: none; } }
+  @media (max-width: 300px) { .hash { display: none; } }
 </style>
 </head>
 <body>
 <header>
-  <div class="branch">⎇ main</div>
-  <div class="sub">orca-git-graph · 1 commit · actualizado 23:17:19</div>
+  <span><span class="label">Repo:</span> <b>orca-git-graph</b></span>
+  <span><span class="label">Rama:</span> <b>main</b></span>
+  <span class="sub">2 commits · actualizado <span class="clock">23:25:02</span></span>
 </header>
 
 
-<div class="body"><svg class="graph" width="20" height="48" viewBox="0 0 20 48" fill="none" stroke-width="2" stroke-linecap="round"><path d="M10 12 V24" stroke="#4FC3F7" stroke-dasharray="3 3"/><path d="M10 24 V36" stroke="#4FC3F7" stroke-dasharray="3 3"/><circle cx="10" cy="12" r="4.5" fill="var(--background, #1e1e1e)" stroke="#4FC3F7" stroke-width="2" stroke-dasharray="2.5 2"/><circle cx="10" cy="36" r="5.5" fill="var(--background, #1e1e1e)" stroke="#4FC3F7" stroke-width="2.5"/></svg><div class="list"><div class="row wip" title="Cambios sin confirmar
-3 sin preparar
+<table>
+<thead><tr><th class="graph" style="min-width:28px">Grafo</th><th class="desc">Descripción</th><th class="date">Fecha</th><th class="author">Autor</th><th class="hash">Commit</th></tr></thead>
+<tbody><tr class="wip" title="Cambios sin confirmar
+4 preparados · 1 sin preparar
 
- M panel.html
- M render.mjs
- M test/render.test.mjs"><span class="subject">Cambios sin confirmar</span><span class="meta">3 ficheros</span></div><div class="row is-head" title="36b46ba750 · Sergi Tejada · 11/10/2026 22:58
+M  README.md
+MM panel.html
+M  render.mjs
+M  test/render.test.mjs"><td class="graph"><svg class="graph" width="28" height="72" viewBox="0 0 28 72" fill="none" stroke-width="2" stroke-linecap="round"><path d="M14 12 V24" stroke="#808080"/><path d="M14 24 V36" stroke="#808080"/><path d="M14 36 V48" stroke="#0085d9"/><path d="M14 48 V60" stroke="#0085d9"/><circle cx="14" cy="12" r="4" fill="var(--background, #1e1e1e)" stroke="#808080" stroke-width="1.5"/><circle cx="14" cy="36" r="4" fill="#0085d9"/><circle cx="14" cy="60" r="4" fill="#0085d9"/></svg></td><td class="desc"><b>Cambios sin confirmar (4)</b></td><td class="date"><span class="clock">11 oct 2026 23:25</span></td><td class="author">*</td><td class="hash">*</td></tr><tr title="65fbaafc70237909ab25d1706b1f3447474aa042 · RubenGlam · 11 oct 2026 23:20
 
-Add Git Graph plugin for Orca sidebar
+feat: show uncommitted changes row in the graph
 
-HEAD -&gt; main, origin/main, origin/HEAD"><span class="ref head">main</span><span class="ref remote">origin/main</span><span class="more">+1</span><span class="subject">Add Git Graph plugin for Orca sidebar</span><span class="meta">19 minutes</span></div></div></div>
+HEAD -&gt; main, origin/main, origin/HEAD"><td class="graph"></td><td class="desc"><span class="head-dot" style="border-color:#0085d9" title="HEAD"></span><span class="ref active"><span class="ico" style="background:#0085d9"><svg viewBox="0 0 10 16"><path d="M10 5c0-1.11-.89-2-2-2a1.993 1.993 0 0 0-1 3.72v.3c-.02.52-.23.98-.63 1.38-.4.4-.86.61-1.38.63-.83.02-1.48.16-2 .45V4.72a1.993 1.993 0 0 0-1-3.72C.88 1 0 1.89 0 3a2 2 0 0 0 1 1.72v6.56c-.59.35-1 .99-1 1.72 0 1.11.89 2 2 2 1.11 0 2-.89 2-2 0-.53-.2-1-.53-1.36.09-.06.48-.41.59-.47.25-.11.56-.17.94-.17 1.05-.05 1.95-.45 2.75-1.25S8.95 7.77 9 6.73h-.02C9.59 6.37 10 5.73 10 5zM2 1.8c.66 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2C1.35 4.2.8 3.65.8 3c0-.65.55-1.2 1.2-1.2zm0 12.41c-.66 0-1.2-.55-1.2-1.2 0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2zm6-8c-.66 0-1.2-.55-1.2-1.2 0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2z"/></svg></span><span class="name">main</span><span class="remote">origin</span></span><span class="ref"><span class="ico" style="background:#0085d9"><svg viewBox="0 0 10 16"><path d="M10 5c0-1.11-.89-2-2-2a1.993 1.993 0 0 0-1 3.72v.3c-.02.52-.23.98-.63 1.38-.4.4-.86.61-1.38.63-.83.02-1.48.16-2 .45V4.72a1.993 1.993 0 0 0-1-3.72C.88 1 0 1.89 0 3a2 2 0 0 0 1 1.72v6.56c-.59.35-1 .99-1 1.72 0 1.11.89 2 2 2 1.11 0 2-.89 2-2 0-.53-.2-1-.53-1.36.09-.06.48-.41.59-.47.25-.11.56-.17.94-.17 1.05-.05 1.95-.45 2.75-1.25S8.95 7.77 9 6.73h-.02C9.59 6.37 10 5.73 10 5zM2 1.8c.66 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2C1.35 4.2.8 3.65.8 3c0-.65.55-1.2 1.2-1.2zm0 12.41c-.66 0-1.2-.55-1.2-1.2 0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2zm6-8c-.66 0-1.2-.55-1.2-1.2 0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2z"/></svg></span><span class="name">origin/HEAD</span></span><span class="subject">feat: show uncommitted changes row in the graph</span></td><td class="date">11 oct 2026 23:20</td><td class="author">RubenGlam</td><td class="hash">65fbaafc</td></tr><tr title="36b46ba750b5ab1a539dac23373e5b14edfe2b21 · Sergi Tejada · 11 oct 2026 22:58
+
+Add Git Graph plugin for Orca sidebar"><td class="graph"></td><td class="desc"><span class="subject">Add Git Graph plugin for Orca sidebar</span></td><td class="date">11 oct 2026 22:58</td><td class="author">Sergi Tejada</td><td class="hash">36b46ba7</td></tr></tbody>
+</table>
 </body>
 </html>

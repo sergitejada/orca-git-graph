@@ -1,11 +1,12 @@
 # Git Graph para Orca
 
-Plugin de [Orca](https://github.com/stablyai/orca) que añade a la sidebar derecha, junto a Ficheros, Source Control y PRs, el grafo de commits y ramas del worktree, al estilo del Git Graph de Visual Studio.
+Plugin de [Orca](https://github.com/stablyai/orca) que añade a la sidebar derecha, junto a Ficheros, Source Control y PRs, el grafo de commits y ramas del worktree, al estilo de la extensión Git Graph de VS Code.
 
-- Carriles de colores, con curvas donde una rama sale o se fusiona.
-- HEAD marcado con un círculo hueco.
-- Etiquetas de rama local, remota y tag.
-- Al pasar el ratón: hash, autor, fecha exacta y mensaje completo.
+- Tabla con columnas Grafo, Descripción, Fecha, Autor y Commit. En una sidebar estrecha se ocultan Autor, Fecha y Commit, en ese orden.
+- Carriles con la paleta de Git Graph y curvas donde una rama sale o se fusiona.
+- Fila **Cambios sin confirmar (N)** arriba, unida a HEAD con una línea gris.
+- Etiquetas de rama y tag con icono; la remota del mismo nombre va dentro de la etiqueta local (`main | origin`).
+- Al pasar el ratón: hash completo, autor, fecha y mensaje; en los cambios sin confirmar, los ficheros.
 - Muestra ramas locales, remotas, tags y HEAD (`git log --branches --remotes --tags HEAD`), sin refs internas como checkpoints de agentes.
 
 ## Requisitos
