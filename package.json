@@ -5,10 +5,28 @@
   "description": "Orca plugin: commit and branch graph of the active worktree in the right sidebar.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
-    "test": "node --test",
+    "build": "tsc --noEmit && tsx src/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/build.ts && tsx --test test/render.test.mjs test/explore.test.ts test/focus.test.ts test/main.test.mjs",
+    "test:browser": "node --test test/panel.browser.mjs",
     "render": "node render.mjs",
     "reset": "node render.mjs --reset"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.25.11",
+    "playwright-core": "^1.64.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   }
 }
