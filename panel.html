@@ -32,6 +32,7 @@
   }
   .row:hover { background: var(--accent, rgba(127,127,127,.15)); }
   .row.is-head .subject { font-weight: 600; }
+  .row.wip .subject { font-style: italic; color: var(--muted-foreground, #999); }
   .more { flex: none; color: var(--muted-foreground, #999); font-size: 10.5px; }
   .ref {
     flex: 0 1 auto; min-width: 28px; max-width: 30%; overflow: hidden; text-overflow: ellipsis;
@@ -48,11 +49,20 @@
 </head>
 <body>
 <header>
-  <div class="branch">⎇ —</div>
-  <div class="sub">Sin repositorio · 0 commits</div>
+  <div class="branch">⎇ main</div>
+  <div class="sub">orca-git-graph · 1 commit · actualizado 23:17:19</div>
 </header>
 
-<div class="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div>
 
+<div class="body"><svg class="graph" width="20" height="48" viewBox="0 0 20 48" fill="none" stroke-width="2" stroke-linecap="round"><path d="M10 12 V24" stroke="#4FC3F7" stroke-dasharray="3 3"/><path d="M10 24 V36" stroke="#4FC3F7" stroke-dasharray="3 3"/><circle cx="10" cy="12" r="4.5" fill="var(--background, #1e1e1e)" stroke="#4FC3F7" stroke-width="2" stroke-dasharray="2.5 2"/><circle cx="10" cy="36" r="5.5" fill="var(--background, #1e1e1e)" stroke="#4FC3F7" stroke-width="2.5"/></svg><div class="list"><div class="row wip" title="Cambios sin confirmar
+3 sin preparar
+
+ M panel.html
+ M render.mjs
+ M test/render.test.mjs"><span class="subject">Cambios sin confirmar</span><span class="meta">3 ficheros</span></div><div class="row is-head" title="36b46ba750 · Sergi Tejada · 11/10/2026 22:58
+
+Add Git Graph plugin for Orca sidebar
+
+HEAD -&gt; main, origin/main, origin/HEAD"><span class="ref head">main</span><span class="ref remote">origin/main</span><span class="more">+1</span><span class="subject">Add Git Graph plugin for Orca sidebar</span><span class="meta">19 minutes</span></div></div></div>
 </body>
 </html>

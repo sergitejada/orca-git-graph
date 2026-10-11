@@ -46,6 +46,35 @@ function parseLog(stdout) {
     })
 }
 
+// Salida de `git status --porcelain=v1 -z`: "XY ruta\0". En renombrados y
+// copias la ruta original llega como entrada aparte y se descarta.
+export function parseStatus(stdout) {
+  const entries = stdout.split('\0')
+  const changes = []
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]
+    if (entry.length < 4) continue
+    const [x, y] = entry
+    changes.push({ x, y, path: entry.slice(3) })
+    if (x === 'R' || x === 'C') i++
+  }
+  return changes
+}
+
+// Commit ficticio que cuelga de HEAD y representa el árbol de trabajo
+export const WIP = 'WORKING_TREE'
+export const wipCommit = (changes, head) => ({
+  hash: WIP,
+  wip: true,
+  changes,
+  parents: head ? [head] : [],
+  refs: [],
+  subject: 'Cambios sin confirmar',
+  author: '',
+  ago: '',
+  date: '',
+})
+
 // Cada carril espera un hash. Un commit ocupa el carril que lo espera; los
 // demás que lo esperaban confluyen en él (joins) y cada padre extra abre o
 // reutiliza un carril (forks). Los carriles no se desplazan: las verticales
@@ -101,21 +130,25 @@ function graphSvg(rows, head) {
   const width = PAD * 2 + (lanes - 1) * LANE
   const paths = []
   const dots = []
+  // el carril que une los cambios sin confirmar con HEAD va discontinuo
+  const wipLane = rows[0]?.commit.wip ? rows[0].col : -1
+  const dashed = (lane, hash) => lane === wipLane && hash === head
   rows.forEach((row, r) => {
     const top = r * ROW
     const mid = top + ROW / 2
     const bottom = top + ROW
     const cx = x(row.col)
-    const line = (d, lane) => paths.push(`<path d="${d}" stroke="${color(lane)}"/>`)
+    const line = (d, lane, dash = false) =>
+      paths.push(`<path d="${d}" stroke="${color(lane)}"${dash ? ' stroke-dasharray="3 3"' : ''}/>`)
     // carriles que solo pasan por esta fila
     const width = Math.max(row.before.length, row.after.length)
     for (let i = 0; i < width; i++) {
       if (i === row.col || row.joins.includes(i)) continue
-      if (row.before[i] && row.after[i] === row.before[i]) line(`M${x(i)} ${top} V${bottom}`, i)
+      if (row.before[i] && row.after[i] === row.before[i]) line(`M${x(i)} ${top} V${bottom}`, i, dashed(i, row.before[i]))
     }
-    if (row.hasIncoming) line(`M${cx} ${top} V${mid}`, row.col)
-    for (const j of row.joins) line(curve(x(j), top, cx, mid), j)
-    if (row.after[row.col]) line(`M${cx} ${mid} V${bottom}`, row.col)
+    if (row.hasIncoming) line(`M${cx} ${top} V${mid}`, row.col, dashed(row.col, row.commit.hash))
+    for (const j of row.joins) line(curve(x(j), top, cx, mid), j, dashed(j, row.commit.hash))
+    if (row.after[row.col]) line(`M${cx} ${mid} V${bottom}`, row.col, row.commit.wip)
     for (const f of row.forks) {
       line(curve(cx, mid, x(f), bottom), f)
       // un carril que ya existía sigue su vertical bajo la curva
@@ -124,7 +157,9 @@ function graphSvg(rows, head) {
     const isHead = row.commit.hash === head
     const isMerge = row.commit.parents.length > 1
     dots.push(
-      isHead
+      row.commit.wip
+        ? `<circle cx="${cx}" cy="${mid}" r="4.5" fill="var(--background, #1e1e1e)" stroke="${color(row.col)}" stroke-width="2" stroke-dasharray="2.5 2"/>`
+        : isHead
         ? `<circle cx="${cx}" cy="${mid}" r="5.5" fill="var(--background, #1e1e1e)" stroke="${color(row.col)}" stroke-width="2.5"/>`
         : `<circle cx="${cx}" cy="${mid}" r="${isMerge ? 3 : 4}" fill="${color(row.col)}"/>`,
     )
@@ -146,11 +181,32 @@ function refPill(ref) {
   return `<span class="ref ${kind}">${esc(label)}</span>`
 }
 
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
+const MAX_TIP_FILES = 15
+
+function wipRow(c) {
+  const count = (pred, one, many) => {
+    const n = c.changes.filter(pred).length
+    return n ? plural(n, one, many) : null
+  }
+  const summary = [
+    count(ch => ch.x !== ' ' && ch.x !== '?', 'preparado', 'preparados'),
+    count(ch => ch.y !== ' ' && ch.y !== '?', 'sin preparar', 'sin preparar'),
+    count(ch => ch.x === '?', 'sin seguimiento', 'sin seguimiento'),
+  ].filter(Boolean)
+  const files = c.changes.slice(0, MAX_TIP_FILES).map(ch => `${ch.x}${ch.y} ${ch.path}`)
+  if (c.changes.length > MAX_TIP_FILES) files.push(`… y ${c.changes.length - MAX_TIP_FILES} más`)
+  const tip = `${c.subject}\n${summary.join(' · ')}\n\n${files.join('\n')}`
+  return `<div class="row wip" title="${esc(tip)}"><span class="subject">${esc(c.subject)}</span><span class="meta">${plural(c.changes.length, 'fichero', 'ficheros')}</span></div>`
+}
+
 export function renderHtml({ repo, branch, head, rows, error }) {
   const now = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const commitCount = rows.filter(row => !row.commit.wip).length
   const list = rows
     .map(row => {
       const c = row.commit
+      if (c.wip) return wipRow(c)
       const tip = `${c.hash.slice(0, 10)} · ${c.author} · ${c.date}\n\n${c.subject}${c.refs.length ? `\n\n${c.refs.join(', ')}` : ''}`
       return `<div class="row${c.hash === head ? ' is-head' : ''}" title="${esc(tip)}">${c.refs.slice(0, 2).map(refPill).join('')}${c.refs.length > 2 ? `<span class="more">+${c.refs.length - 2}</span>` : ''}<span class="subject">${esc(c.subject)}</span><span class="meta">${esc(c.ago.replace(/ ago$/, ''))}</span></div>`
     })
@@ -189,6 +245,7 @@ export function renderHtml({ repo, branch, head, rows, error }) {
   }
   .row:hover { background: var(--accent, rgba(127,127,127,.15)); }
   .row.is-head .subject { font-weight: 600; }
+  .row.wip .subject { font-style: italic; color: var(--muted-foreground, #999); }
   .more { flex: none; color: var(--muted-foreground, #999); font-size: 10.5px; }
   .ref {
     flex: 0 1 auto; min-width: 28px; max-width: 30%; overflow: hidden; text-overflow: ellipsis;
@@ -206,7 +263,7 @@ export function renderHtml({ repo, branch, head, rows, error }) {
 <body>
 <header>
   <div class="branch">⎇ ${esc(branch || '—')}</div>
-  <div class="sub">${esc(repo ? basename(repo) : 'Sin repositorio')} · ${rows.length} commits · actualizado ${now}</div>
+  <div class="sub">${esc(repo ? basename(repo) : 'Sin repositorio')} · ${plural(commitCount, 'commit', 'commits')} · actualizado ${now}</div>
 </header>
 ${error ? `<div class="error">${esc(error)}</div>` : ''}
 ${!error && !rows.length ? `<div class="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div>` : ''}
@@ -219,16 +276,22 @@ ${rows.length ? `<div class="body">${graphSvg(rows, head)}<div class="list">${li
 // Devuelve el HTML del repo; no escribe nada.
 export async function buildPanel(repo) {
   try {
-    const [log, head, branch] = await Promise.all([
+    const [log, head, branch, status] = await Promise.all([
       git(repo, ['log', '--branches', '--remotes', '--tags', 'HEAD', '--date-order', `-n${LIMIT}`, `--format=${LOG_FORMAT}`, '--date=format:%d/%m/%Y %H:%M']),
       git(repo, ['rev-parse', 'HEAD']),
       git(repo, ['branch', '--show-current']),
+      // sin --no-optional-locks, status refresca el índice y puede chocar
+      // con el git de un agente; en un repo bare falla y se ignora
+      git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z']).catch(() => ''),
     ])
+    const commits = parseLog(log)
+    const changes = parseStatus(status)
+    if (changes.length) commits.unshift(wipCommit(changes, head.trim()))
     return renderHtml({
       repo,
       branch: branch.trim() || '(HEAD detached)',
       head: head.trim(),
-      rows: layout(parseLog(log)),
+      rows: layout(commits),
     })
   } catch (e) {
     return renderHtml({ repo, branch: '', head: '', rows: [], error: String(e.stderr || e.message).trim() })
