@@ -7,13 +7,14 @@ interface DetailsProps {
   loadedHashes: Set<string>
   onClose(): void
   onJump(hash: string): void
+  changesView: ChangesView
+  onChangesView(view: ChangesView): void
 }
 
-export function Details({ row, loadedHashes, onClose, onJump }: DetailsProps) {
+export function Details({ row, loadedHashes, onClose, onJump, changesView, onChangesView }: DetailsProps) {
   const { commit } = row
   const hashInput = useRef<HTMLInputElement>(null)
   const [copyMessage, setCopyMessage] = useState('')
-  const [changesView, setChangesView] = useState<ChangesView>('tree')
 
   const copyHash = async () => {
     try {
@@ -30,7 +31,7 @@ export function Details({ row, loadedHashes, onClose, onJump }: DetailsProps) {
   }
 
   return <aside id="commit-details" className="details" aria-label="Detalles del commit">
-    <div className="details-heading"><h2>{commit.wip ? 'Cambios sin confirmar' : commit.stash ? `Stash ${commit.stash}` : 'Detalles del commit'}</h2><div className="details-heading-actions">{commit.wip ? <ChangesViewButtons view={changesView} onChange={setChangesView} /> : null}<button type="button" onClick={onClose} aria-label="Cerrar detalles" title="Cerrar detalles (Esc)">✕</button></div></div>
+    <div className="details-heading"><h2>{commit.wip ? 'Cambios sin confirmar' : commit.stash ? `Stash ${commit.stash}` : 'Detalles del commit'}</h2><div className="details-heading-actions">{commit.wip ? <ChangesViewButtons view={changesView} onChange={onChangesView} /> : null}<button type="button" onClick={onClose} aria-label="Cerrar detalles" title="Cerrar detalles (Esc)">✕</button></div></div>
     <h3>{commit.subject}</h3>
     {commit.wip ? <>
       <p className="detail-muted">{commit.changes.length} ficheros · {commit.changes.filter(change => change.x !== ' ' && change.x !== '?').length} preparados · {commit.changes.filter(change => change.y !== ' ' && change.y !== '?').length} sin preparar · {commit.changes.filter(change => change.x === '?').length} sin seguimiento</p>
