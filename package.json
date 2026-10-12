@@ -11,6 +11,8 @@
   "scripts": {
     "build": "tsc --noEmit && tsx src/build.ts",
     "typecheck": "tsc --noEmit",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
     "test": "tsx src/build.ts && tsx --test test/render.test.mjs test/explore.test.ts test/focus.test.ts test/main.test.mjs test/stash-actions.test.ts",
     "test:browser": "node --test test/panel.browser.mjs",
     "render": "node render.mjs",
@@ -21,6 +23,7 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "@types/node": "^20.19.43",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

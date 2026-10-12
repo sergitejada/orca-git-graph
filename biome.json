@@ -1,0 +1,156 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**",
+      "!main.mjs",
+      "!render.mjs",
+      "!panel.html",
+      "!panel.runtime.html",
+      "!agents/**",
+      "!node_modules",
+      "!dist",
+      "!build",
+      "!public",
+      "!package-lock.json",
+      "!yarn.lock",
+      "!pnpm-lock.yaml",
+      "!bun.lock",
+      ".gitignore",
+      ".env.*"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "tab",
+    "indentWidth": 2,
+    "lineWidth": 120,
+    "lineEnding": "lf",
+    "bracketSameLine": true,
+    "bracketSpacing": true,
+    "expand": "auto",
+    "formatWithErrors": true
+  },
+  "javascript": {
+    "formatter": {
+      "enabled": true,
+      "semicolons": "asNeeded",
+      "quoteStyle": "double",
+      "quoteProperties": "asNeeded",
+      "arrowParentheses": "asNeeded",
+      "trailingCommas": "none",
+      "jsxQuoteStyle": "double"
+    }
+  },
+  "json": {
+    "parser": {
+      "allowTrailingCommas": true
+    },
+    "formatter": {
+      "indentStyle": "space",
+      "trailingCommas": "none"
+    }
+  },
+  "html": {
+    "parser": {
+      "interpolation": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/branch-selector.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useFocusableInteractive": "warn"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/stash-menu.tsx"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noShadowRestrictedNames": "warn"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/render.ts"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUndeclaredDependencies": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["*.json", "*.md", "*.toml", "*.yml"],
+      "formatter": {
+        "indentStyle": "space"
+      }
+    }
+  ],
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        "noUnknownAtRules": "off",
+        "noArrayIndexKey": "off",
+        "noExplicitAny": "warn",
+        "noImplicitAnyLet": "warn",
+        "useIterableCallbackReturn": "warn",
+        "noAssignInExpressions": "warn"
+      },
+      "a11y": {
+        "noSvgWithoutTitle": "warn",
+        "useButtonType": "warn",
+        "noStaticElementInteractions": "warn",
+        "useKeyWithClickEvents": "warn",
+        "useKeyWithMouseEvents": "warn",
+        "noLabelWithoutControl": "warn",
+        "noAutofocus": "warn",
+        "useHtmlLang": "warn",
+        "useAriaPropsSupportedByRole": "warn"
+      },
+      "correctness": {
+        "useExhaustiveDependencies": "warn",
+        "noSwitchDeclarations": "warn",
+        "useParseIntRadix": "off",
+        "noUndeclaredDependencies": "error"
+      },
+      "security": {
+        "noDangerouslySetInnerHtml": "warn"
+      },
+      "performance": {
+        "noImgElement": "warn"
+      }
+    },
+    "domains": {
+      "next": "recommended",
+      "react": "recommended"
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "off"
+      }
+    }
+  }
+}

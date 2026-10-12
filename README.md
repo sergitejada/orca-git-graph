@@ -70,6 +70,8 @@ El worktree mostrado es el **seleccionado en Orca**. Como la API pública de plu
 npm install
 npm run build                # comprueba los tipos y compila TypeScript/React
 npm run typecheck            # solo comprueba los tipos
+npm run lint                 # analiza el código con Biome
+npm run lint:fix             # aplica las correcciones seguras del linter
 npm test                     # recompila y ejecuta los tests del grafo/HTML
 npm run test:browser         # iframe sandbox + CSP, estilos e hidratación (Edge)
 node render.mjs <repo>       # genera panel.html para un repo concreto
@@ -77,6 +79,10 @@ node render.mjs --reset      # deja panel.html vacío
 ```
 
 El worker marca `panel.html` como `skip-worktree` automáticamente antes de actualizarlo, así Git no lo muestra ni lo incluye en commits normales.
+
+El repositorio usa pnpm: instala las dependencias con `pnpm install` y ejecuta los scripts con `pnpm run <script>` (por ejemplo, `pnpm run lint`).
+
+El linter usa [Biome](https://biomejs.dev/linter/), configurado en `biome.json`, y respeta `.gitignore`. Se excluyen los bundles, el HTML generado y las skills. Algunas reglas se mantienen como avisos para incorporar el linter al código existente; puedes exigir que fallen con `pnpm run lint --error-on-warnings`. La comprobación de dependencias tiene una excepción en `src/render.ts` porque `panel-assets` es un módulo virtual creado por esbuild. `lint:fix` aplica solo correcciones seguras del linter, sin reformatear ni organizar imports.
 
 Después de recompilar, recarga el plugin en Orca para reiniciar el worker con el nuevo bundle. La prueba de navegador usa Edge instalado; se puede seleccionar otro Chromium con `PLAYWRIGHT_BROWSER_CHANNEL` o `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`. Su captura queda en `test-artifacts/`.
 
