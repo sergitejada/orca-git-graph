@@ -12,6 +12,7 @@ import { Panel } from './panel.js'
 import { script, styles } from 'panel-assets'
 import { PALETTE } from './graph-style.js'
 import { layout } from './graph-layout.js'
+import { loadCommitDiffs } from './commit-diff.js'
 
 export { layout } from './graph-layout.js'
 import type { Change, Commit, GitCommit, GroupedRefs, LocalRef, PanelData, RenderOptions, WorkingCommit } from './types.js'
@@ -66,7 +67,7 @@ export function parseStashes(stdout: string): GitCommit[] {
   return stdout.split('\x1e').map(record => record.trimStart()).filter(Boolean).map(record => {
     const separator = record.indexOf('\x1f')
     const [commit] = parseLog(record.slice(separator + 1))
-    return { ...commit, refs: [], parents: commit.parents.slice(0, 1), stash: record.slice(0, separator) }
+    return { ...commit, refs: [], stashParents: commit.parents, parents: commit.parents.slice(0, 1), stash: record.slice(0, separator) }
   })
 }
 
@@ -196,7 +197,9 @@ export async function buildPanel(repo: string): Promise<string> {
     const stashes = parseStashes(stashLog)
     const bases = [...new Set(stashes.flatMap(stash => stash.parents))]
     const log = await git(repo, ['log', '--branches', '--remotes', '--tags', 'HEAD', ...bases, '--date-order', `-n${LIMIT}`, `--format=${LOG_FORMAT}`])
-    const commits: Commit[] = withStashes(parseLog(log), stashes)
+    const history = withStashes(parseLog(log), stashes)
+    await loadCommitDiffs(repo, history)
+    const commits: Commit[] = history
     const changes = parseStatus(status)
     if (changes.length) commits.unshift(wipCommit(changes, head.trim()))
     return renderHtml({

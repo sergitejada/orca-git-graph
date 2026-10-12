@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { PanelRow } from './types.js'
 import { Changes, ChangesViewButtons, type ChangesView } from './changes.js'
+import { CommitFiles } from './commit-files.js'
 
 interface DetailsProps {
   row: PanelRow
@@ -41,6 +42,7 @@ export function Details({ row, loadedHashes, onClose, onJump }: DetailsProps) {
       <span className="copy-message" role="status">{copyMessage}</span>
       {commit.refs.length ? <div className="detail-refs">{commit.refs.map(ref => <span key={ref}>{ref}</span>)}</div> : null}
       <pre className="commit-message">{commit.message || commit.subject}</pre>
+      <CommitFiles comparisons={commit.comparisons} notice={commit.diffNotice} />
     </>}
     {commit.parents.length ? <div className="parents"><h4>{commit.parents.length > 1 ? `Padres (${commit.parents.length}) · merge` : 'Padre'}</h4>{commit.parents.map(parent => loadedHashes.has(parent)
       ? <button type="button" key={parent} title={`Ver commit padre ${parent}`} onClick={() => onJump(parent)}>{parent.slice(0, 8)}</button>

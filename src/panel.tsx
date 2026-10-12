@@ -231,7 +231,7 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
             if (!nextRows.some(row => row.commit.hash === focusHash)) setFocusHash(nextRows.some(row => row.commit.hash === head) ? head : nextRows[0]?.commit.hash || '')
             setStashMenu(null)
           }} />
-          <button type="button" className="icon-button" aria-label="Filtros" title={filterCount ? `Filtros (${filterCount})` : 'Filtros'} aria-expanded={showFilters} aria-controls="history-filters" data-active={filterCount > 0 || undefined} onClick={() => setShowFilters(!showFilters)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18l-7 8v7l-4 2v-9Z" /></svg>{filterCount ? <span className="filter-indicator" aria-label={`${filterCount} filtros activos`} /> : null}</button>
+          <button type="button" className="icon-button" aria-label="Filtros" title={filterCount ? `Filtros (${filterCount})` : 'Filtros'} aria-expanded={showFilters} aria-controls="history-filters" data-active={filterCount > 0 || undefined} onClick={() => setShowFilters(!showFilters)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18l-7 8v7l-4 2v-9Z" /></svg>{filterCount ? <span className="filter-indicator" role="img" aria-label={`${filterCount} filtros activos`} /> : null}</button>
         </> : null}
       </div>
     </header>
@@ -260,7 +260,7 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
       }} onRowRef={element => { if (element) rowElements.current.set(row.commit.hash, element); else rowElements.current.delete(row.commit.hash) }} />)}</tbody>
       </table></div>
       {selected ? <>
-        <div className="details-resizer" role="separator" tabIndex={0} aria-label="Ajustar altura de los detalles" aria-orientation="horizontal" aria-controls="commit-details" aria-valuemin={20} aria-valuemax={75} aria-valuenow={Math.round(detailsHeight)} aria-valuetext={`${Math.round(detailsHeight)}% del panel`} onPointerDown={event => {
+        <hr className="details-resizer" tabIndex={0} aria-label="Ajustar altura de los detalles" aria-orientation="horizontal" aria-controls="commit-details" aria-valuemin={20} aria-valuemax={75} aria-valuenow={Math.round(detailsHeight)} aria-valuetext={`${Math.round(detailsHeight)}% del panel`} onPointerDown={event => {
           if (event.button !== 0 || !workspace.current) return
           event.preventDefault()
           event.currentTarget.focus()
