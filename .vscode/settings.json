@@ -1,0 +1,71 @@
+{
+  "js/ts.tsdk.path": "node_modules/typescript/lib",
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "package.json": "pnpm-lock.yaml, package-lock.json, yarn.lock, bun.lock",
+    ".prettierrc.mjs": ".prettierignore",
+    ".eslintrc.json": ".eslintignore",
+    ".env.example": ".env.development, .env.production, .env, .env.local",
+    "README.md": "CONTRIBUTING.md",
+    ".node-version": ".nvmrc",
+    "Dockerfile": ".dockerignore"
+  },
+  "editor.linkedEditing": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "never"
+  },
+  "editor.defaultFormatter": "biomejs.biome",
+  "editor.formatOnPaste": true,
+  "editor.formatOnSave": true,
+  "files.associations": {
+    "*.svg": "xml"
+  },
+  "editor.insertSpaces": false,
+  "editor.detectIndentation": false,
+  "emmet.showExpandedAbbreviation": "never",
+  "[json][jsonc]": {
+    "editor.defaultFormatter": "biomejs.biome",
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2
+  },
+  "[html]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[css]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "tailwindCSS.classAttributes": ["class", "className"],
+  "tailwindCSS.classFunctions": ["cn"],
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/CVS": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/coverage": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/cdk.out": true,
+    "**/.cdk.staging": true
+  },
+  "js/ts.preferences.autoImportSpecifierExcludeRegexes": ["^@radix-ui/"],
+  "[jsonc]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  }
+}
