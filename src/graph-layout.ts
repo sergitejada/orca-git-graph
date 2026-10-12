@@ -1,5 +1,41 @@
 import type { Commit, GraphRow } from './types.js'
 
+// Keep Git's order whenever possible, but emit every loaded child before its
+// parents. Individually requested ancestors can arrive in any order.
+export function orderHistory<T extends Pick<Commit, 'hash' | 'parents'>>(commits: T[]): T[] {
+  const positions = new Map(commits.map((commit, index) => [commit.hash, index]))
+  const children = commits.map(() => 0)
+  for (const commit of commits) {
+    for (const parent of commit.parents) {
+      const index = positions.get(parent)
+      if (index !== undefined) children[index]++
+    }
+  }
+  const ready = commits.map((_commit, index) => index).filter(index => children[index] === 0)
+  const ordered: T[] = []
+  while (ready.length) {
+    const next = ready.shift()
+    if (next === undefined) break
+    const commit = commits[next]
+    ordered.push(commit)
+    for (const parent of commit.parents) {
+      const index = positions.get(parent)
+      if (index === undefined) continue
+      if (--children[index] !== 0) continue
+      let low = 0
+      let high = ready.length
+      while (low < high) {
+        const middle = (low + high) >>> 1
+        if (ready[middle] < index) low = middle + 1
+        else high = middle
+      }
+      ready.splice(low, 0, index)
+    }
+  }
+  if (ordered.length !== commits.length) throw new Error('El historial contiene conexiones cíclicas o hashes duplicados.')
+  return ordered
+}
+
 // Cada carril espera un hash. Un commit ocupa el carril que lo espera; los
 // demás que lo esperaban confluyen en él (joins) y cada padre extra abre o
 // reutiliza un carril (forks). Los carriles no se desplazan: las verticales

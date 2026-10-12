@@ -12,6 +12,13 @@ header {
   padding: 7px 10px; font-size: 12px;
 }
 header .label { color: var(--muted-foreground, #999); }
+header > span { min-width: 0; overflow-wrap: anywhere; }
+.upstream-status { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 0 10px 8px; min-width: 0; font-size: 12px; }
+.upstream-name { min-width: 0; overflow-wrap: anywhere; }
+.upstream-counts { display: flex; flex-wrap: wrap; gap: 12px; }
+.upstream-counts > span { white-space: nowrap; }
+.upstream-note { flex-basis: 100%; color: var(--muted-foreground, #999); font-size: 11px; overflow-wrap: anywhere; }
+.upstream-status .label { color: var(--muted-foreground, #999); }
 header .sub { margin-left: auto; color: var(--muted-foreground, #999); font-size: 11px; }
 .header-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .view-options-control { position: relative; display: flex; min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -91,11 +98,12 @@ input[type=search], input[readonly], select { color: inherit; background: var(--
 .filter-options select { max-width: 180px; }
 .filter-options .merge-filter { color: inherit; }
 .no-matches { border-top: 1px solid rgba(128,128,128,.2); }
-#root { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+#root { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+@supports (height: 100dvh) { #root { height: 100dvh; } }
 #root > :not(.workspace) { flex-shrink: 0; }
 .workspace { display: grid; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; }
 .graph-list { container-type: inline-size; container-name: graph-list; min-width: 0; min-height: 0; width: 100%; overflow: auto; }
-.details-resizer { cursor: row-resize; touch-action: none; background: rgba(128,128,128,.08); border-block: 1px solid rgba(128,128,128,.35); }
+.details-resizer { margin: 0; border: 0; cursor: row-resize; touch-action: none; background: rgba(128,128,128,.08); border-block: 1px solid rgba(128,128,128,.35); }
 .details-resizer::after { content: ''; display: block; width: 36px; height: 2px; margin: 2px auto; background: var(--muted-foreground, #999); border-radius: 2px; }
 .details-resizer:hover, .details-resizer:focus-visible { background: var(--list-active-selection-background, rgba(0,133,217,.2)); }
 .details-resizer:focus-visible { outline: 2px solid var(--focus-border, #007fd4); outline-offset: -2px; }
@@ -141,6 +149,23 @@ tbody tr.selected td:not(.graph) { opacity: 1; }
 .change-deleted { color: var(--git-decoration-deleted-resource-foreground, #e57373); }
 .change-renamed { color: var(--git-decoration-renamed-resource-foreground, #80cbc4); }
 .change-conflict { color: var(--git-decoration-conflicting-resource-foreground, #ef9a9a); }
+.commit-files { min-width: 0; }
+.commit-files h4 { margin: 14px 0 8px; }
+.commit-files code, .diff-path { overflow-wrap: anywhere; white-space: pre-wrap; }
+.diff-comparison { display: grid; gap: 5px; }
+.diff-comparison select { width: 100%; min-width: 0; font: inherit; color: inherit; background: var(--panel-background); border: 1px solid var(--border, #454545); padding: 5px; }
+.commit-file { border-top: 1px solid var(--border, #454545); padding: 6px 0; }
+.commit-file summary { cursor: pointer; overflow-wrap: anywhere; }
+.diff-state { font-size: 11px; }
+.diff-state-A, .diff-added { color: var(--git-decoration-added-resource-foreground, #81c784); }
+.diff-state-D, .diff-deleted { color: var(--git-decoration-deleted-resource-foreground, #e57373); }
+.diff-state-R, .diff-state-C { color: var(--git-decoration-renamed-resource-foreground, #80cbc4); }
+.diff-state-M, .diff-state-T { color: var(--git-decoration-modified-resource-foreground, #ffcc80); }
+.diff-hunk { color: var(--git-decoration-renamed-resource-foreground, #80cbc4); }
+.diff-notice { color: var(--git-decoration-modified-resource-foreground, #ffcc80); overflow-wrap: anywhere; font-size: 11px; }
+.file-patch { max-width: 100%; max-height: 300px; overflow: auto; white-space: pre; tab-size: 4; font-size: 11px; padding: 8px; background: var(--editor-background, #181818); }
+.file-patch pre { margin: 0; font: inherit; }
+.file-patch:focus-visible, .commit-file summary:focus-visible { outline: 1px solid var(--focus-border, #007acc); outline-offset: 2px; }
 .stash-menu { position: fixed; z-index: 20; min-width: 260px; max-width: calc(100vw - 8px); max-height: calc(100vh - 8px); overflow: auto; padding: 4px 0; border: 1px solid var(--border, #454545); background: var(--popover, #202020); color: var(--popover-foreground, #ccc); box-shadow: 0 5px 18px rgba(0,0,0,.45); }
 .stash-menu button { display: block; width: 100%; border: 0; border-radius: 0; text-align: left; padding: 9px 18px; }
 .stash-menu button:hover, .stash-menu button:focus { background: var(--list-active-selection-background, #007acc); color: #fff; outline: none; }
@@ -153,6 +178,10 @@ tbody tr.selected td:not(.graph) { opacity: 1; }
 .stash-dialog label { display: grid; gap: 5px; margin: 12px 0; }
 .stash-dialog input { font: inherit; color: inherit; padding: 5px 7px; border: 1px solid var(--border, #454545); background: var(--panel-background); }
 .stash-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.panel-state-dialog { color: var(--popover-foreground, #ccc); }
+.panel-state-dialog::backdrop { background: rgba(0,0,0,.45); }
+.panel-state-dialog textarea { box-sizing: border-box; width: 100%; min-height: 100px; resize: vertical; font: inherit; color: inherit; background: var(--panel-background); border: 1px solid var(--border, #454545); }
+.panel-state-dialog .stash-dialog-buttons { flex-wrap: wrap; }
 .stash-repo, .stash-notice { overflow-wrap: anywhere; font-size: 11px; color: var(--muted-foreground, #999); }
 .stash-notice { margin: 0; padding: 8px 10px; }
 .view-options-menu { position: fixed; z-index: 10; width: 230px; max-width: calc(100vw - 20px); max-height: calc(100vh - 8px); overflow: auto; padding: 4px; border: 1px solid var(--border, #454545); border-radius: 4px; background: var(--popover, #202020); color: var(--popover-foreground, #ccc); box-shadow: 0 5px 18px rgba(0,0,0,.45); }
