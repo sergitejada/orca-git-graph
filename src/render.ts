@@ -14,7 +14,7 @@ import { PALETTE } from './graph-style.js'
 import { layout } from './graph-layout.js'
 
 export { layout } from './graph-layout.js'
-import type { Change, Commit, GitCommit, GroupedRefs, LocalRef, PanelData, RenderOptions, WorkingCommit } from './types.js'
+import type { Change, Commit, GitCommit, GroupedRefs, LocalRef, PanelData, RenderOptions, UpstreamStatus, WorkingCommit } from './types.js'
 
 const run = promisify(execFile)
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -156,7 +156,26 @@ export function groupRefs(refs: string[], remotes: string[] = []): GroupedRefs {
   return { heads, remotes: loose, tags }
 }
 
-export function renderHtml({ repo, branch, head, rows, remotes = [], now = null, error, loading = false, unborn = false }: RenderOptions): string {
+async function readUpstream(repo: string, branch: string, head: string): Promise<UpstreamStatus> {
+  if (!branch) return { state: 'detached' }
+  if (!head) return { state: 'unborn' }
+  const refs = await git(repo, ['for-each-ref', '--format=%(refname)%09%(upstream)%09%(upstream:short)', 'refs/heads/'])
+  const entry = refs.split('\n').find(line => line.split('\t')[0] === `refs/heads/${branch}`)
+  const [, ref = '', name = ''] = (entry || '').trimEnd().split('\t')
+  if (!ref) return { state: 'none' }
+  const upstreamHead = await git(repo, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`]).catch(() => '')
+  if (!upstreamHead) return { state: 'missing', name }
+  try {
+    const counts = await git(repo, ['rev-list', '--left-right', '--count', `${head}...${upstreamHead.trim()}`, '--'])
+    const [ahead, behind] = counts.trim().split(/\s+/).map(Number)
+    if (!Number.isSafeInteger(ahead) || !Number.isSafeInteger(behind) || ahead < 0 || behind < 0) throw new Error('Invalid counts')
+    return { state: 'tracked', name, ahead, behind }
+  } catch {
+    return { state: 'unavailable', name }
+  }
+}
+
+export function renderHtml({ repo, branch, head, upstream, rows, remotes = [], now = null, error, loading = false, unborn = false }: RenderOptions): string {
   const refsByCommit = Object.fromEntries(rows.map(row => {
     const laneColor = PALETTE[row.col % PALETTE.length]
     const refs = groupRefs(row.commit.refs, remotes)
@@ -172,6 +191,7 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
     actionModule: new URL('./render.mjs', import.meta.url).href,
     branch: branch || '',
     head,
+    upstream,
     rows: rows.map(row => {
       const { date, ...commit } = row.commit
       return { ...row, commit: { ...commit, dateLabel: commit.wip ? (now ? formatDate(now) : '') : (date ? formatDate(date) : '') } }
@@ -219,6 +239,7 @@ export async function buildPanel(repo: string): Promise<string> {
     ])
     const stashes = parseStashes(stashLog)
     const bases = [...new Set(stashes.flatMap(stash => stash.parents))]
+    const upstream = await readUpstream(repo, branch.trim(), head.trim())
     const log = await git(repo, ['log', '--branches', '--remotes', '--tags', ...(head ? ['HEAD'] : []), ...bases, '--date-order', `-n${LIMIT}`, `--format=${LOG_FORMAT}`, '--'])
     const commits: Commit[] = withStashes(parseLog(log), stashes)
     const changes = parseStatus(status)
@@ -227,6 +248,7 @@ export async function buildPanel(repo: string): Promise<string> {
       repo,
       branch: branch.trim() || '(HEAD detached)',
       head: head.trim(),
+      upstream,
       rows: layout(commits),
       remotes: remotes.split('\n').map(r => r.trim()).filter(Boolean),
       now,

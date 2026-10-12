@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
-import type { Change, PanelData, PanelRefs, PanelRow } from './types.js'
+import type { Change, PanelData, PanelRefs, PanelRow, UpstreamStatus } from './types.js'
 import { ROW, LANE, PAD, GREY, color } from './graph-style.js'
 import { branchesOf, emptyFilters, findMatches } from './explore.js'
 import { Details } from './details.js'
@@ -146,7 +146,24 @@ export function Panel(data: PanelData) {
   return <LoadedPanel {...data} />
 }
 
-function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows: allRows, refsByCommit: allRefs, now, error, unborn = false }: PanelData) {
+function Upstream({ status }: { status: UpstreamStatus }) {
+  const message = status.state === 'none' ? 'Sin upstream'
+    : status.state === 'detached' ? 'HEAD separado: sin rama actual'
+    : status.state === 'unborn' ? 'Sin commits'
+    : status.state === 'missing' ? 'Upstream no disponible en refs locales'
+    : status.state === 'unavailable' ? 'Comparación no disponible'
+    : ''
+  return <section className="upstream-status" aria-label="Relación con upstream">
+    {'name' in status ? <span className="upstream-name"><span className="label">Upstream:</span> <b>{status.name}</b></span> : null}
+    {status.state === 'tracked' ? <span className="upstream-counts">
+      <span role="img" aria-label={`${status.ahead} commits por delante (ahead)`}><span aria-hidden="true">↑</span> {status.ahead} ahead</span>
+      <span role="img" aria-label={`${status.behind} commits por detrás (behind)`}><span aria-hidden="true">↓</span> {status.behind} behind</span>
+    </span> : <span>{message}</span>}
+    <span className="upstream-note">Estado de refs locales; fetch actualiza las remotas.</span>
+  </section>
+}
+
+function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, upstream, rows: allRows, refsByCommit: allRefs, now, error, unborn = false }: PanelData) {
   const [viewOptions, setViewOptions] = useState(defaultViewOptions)
   const { rows, refsByCommit } = useMemo(() => visibleHistory(allRows, allRefs, head, viewOptions), [allRows, allRefs, head, viewOptions])
   const [repositoryAction, setRepositoryAction] = useState<'refresh' | 'fetch' | null>(null)
@@ -300,6 +317,7 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
         </> : null}
       </div>
     </header>
+    {!error && upstream ? <Upstream status={upstream} /> : null}
     {error ? <div className="error">{error}</div> : null}
     {notice ? <p className="stash-notice" role="status">{notice}</p> : null}
     {!error && unborn ? <div className="hint" role="status">La rama {branch} todavía no tiene commits. {allRows.some(row => row.commit.wip) ? 'Archivos pendientes del primer commit.' : 'No hay archivos pendientes del primer commit.'}</div> : null}

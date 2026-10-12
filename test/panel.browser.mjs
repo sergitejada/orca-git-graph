@@ -11,6 +11,47 @@ import { buildPanel, layout, renderHtml, wipCommit } from '../render.mjs'
 const csp = "default-src 'none'; connect-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
 const commit = (hash, parents, refs = []) => ({ hash, parents, refs, subject: `commit ${hash}`, author: 'Ana', date: new Date(2026, 0, 1, 10, 0) })
 
+test('upstream se hidrata con etiquetas accesibles y sin desbordamiento en sidebar estrecha', { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 280, height: 480 } })
+    page.setDefaultTimeout(5000)
+    const errors = []
+    const requests = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    page.on('request', request => requests.push(request.url()))
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="border:0;width:100%;height:450px"></iframe>')
+    const frame = page.frameLocator('#panel')
+    const show = upstream => page.locator('#panel').evaluate((element, html) => { element.srcdoc = html }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${renderHtml({ repo: '/repo', branch: 'feature/very-long-branch-name'.repeat(4), head: 'a', rows: layout([commit('a', [])]), upstream })}`)
+    const name = 'origin/release/very-long-upstream-name'.repeat(5)
+    await show({ state: 'tracked', name, ahead: 12, behind: 3 })
+    await frame.getByRole('region', { name: 'Relación con upstream' }).waitFor()
+    await frame.getByLabel('12 commits por delante (ahead)').waitFor()
+    await frame.getByLabel('3 commits por detrás (behind)').waitFor()
+    assert.equal(await frame.locator('.upstream-name b').textContent(), name)
+    await frame.getByRole('button', { name: 'Abrir búsqueda' }).click()
+    await frame.getByLabel('Buscar commits').waitFor()
+    assert.equal(await frame.locator('body').evaluate(element => element.scrollWidth <= document.documentElement.clientWidth), true)
+    await mkdir('test-artifacts', { recursive: true })
+    await page.screenshot({ path: 'test-artifacts/upstream-narrow.png' })
+    for (const [status, message] of [
+      [{ state: 'tracked', name, ahead: 0, behind: 0 }, '0 ahead'],
+      [{ state: 'none' }, 'Sin upstream'],
+      [{ state: 'missing', name }, 'Upstream no disponible en refs locales'],
+      [{ state: 'detached' }, 'HEAD separado: sin rama actual'],
+      [{ state: 'unborn' }, 'Sin commits'],
+      [{ state: 'unavailable', name }, 'Comparación no disponible'],
+    ]) {
+      await show(status)
+      if (status.state === 'tracked') await frame.getByLabel('0 commits por delante (ahead)').waitFor()
+      else await frame.getByText(message, { exact: true }).waitFor()
+    }
+    assert.deepEqual(errors, [])
+    assert.deepEqual(requests, [])
+  } finally { await browser.close() }
+})
+
 test('Git real: la vista sin commits se hidrata y pasa al primer commit sin conexiones inventadas', { timeout: 30000 }, async () => {
   const repo = await mkdtemp(join(tmpdir(), 'orca-unborn-browser-'))
   const browser = await chromium.launch({ channel: 'msedge', headless: true })
