@@ -143,7 +143,7 @@ export function Panel(data: PanelData) {
   return <LoadedPanel {...data} />
 }
 
-function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows: allRows, refsByCommit: allRefs, now, error }: PanelData) {
+function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows: allRows, refsByCommit: allRefs, now, error, unborn = false }: PanelData) {
   const [viewOptions, setViewOptions] = useState(defaultViewOptions)
   const { rows, refsByCommit } = useMemo(() => visibleHistory(allRows, allRefs, head, viewOptions), [allRows, allRefs, head, viewOptions])
   const [repositoryAction, setRepositoryAction] = useState<'refresh' | 'fetch' | null>(null)
@@ -237,7 +237,8 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
     </header>
     {error ? <div className="error">{error}</div> : null}
     {notice ? <p className="stash-notice" role="status">{notice}</p> : null}
-    {!error && !allRows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
+    {!error && unborn ? <div className="hint" role="status">La rama {branch} todavía no tiene commits. {allRows.some(row => row.commit.wip) ? 'Archivos pendientes del primer commit.' : 'No hay archivos pendientes del primer commit.'}</div> : null}
+    {!error && !unborn && !allRows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
     {allRows.length ? <>
       <div className="branch-toolbar"><BranchSelector branches={branches} value={filters.branch} onChange={branch => setFilters({ ...filters, branch })} /></div>
       {filtered ? <fieldset className="toolbar" aria-label="Explorar historial"><button type="button" onClick={() => setFilters(emptyFilters)}>Limpiar</button></fieldset> : null}

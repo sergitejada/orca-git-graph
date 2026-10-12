@@ -69,6 +69,7 @@ export interface PanelData {
   now: string
   error: string
   loading?: boolean
+  unborn?: boolean
 }
 
 export interface RenderOptions {
@@ -80,4 +81,5 @@ export interface RenderOptions {
   now?: Date | null
   error?: string
   loading?: boolean
+  unborn?: boolean
 }
