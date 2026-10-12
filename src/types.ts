@@ -58,12 +58,18 @@ export interface PanelRefs {
   tags: { name: string; color: string }[]
 }
 
+export type UpstreamStatus =
+  | { state: 'tracked'; name: string; ahead: number; behind: number }
+  | { state: 'missing' | 'unavailable'; name: string }
+  | { state: 'none' | 'detached' | 'unborn' }
+
 export interface PanelData {
   repo: string
   repoPath?: string
   actionModule?: string
   branch: string
   head: string
+  upstream?: UpstreamStatus
   rows: PanelRow[]
   refsByCommit: Record<string, PanelRefs>
   now: string
@@ -75,6 +81,7 @@ export interface RenderOptions {
   repo: string
   branch: string
   head: string
+  upstream?: UpstreamStatus
   rows: GraphRow[]
   remotes?: string[]
   now?: Date | null

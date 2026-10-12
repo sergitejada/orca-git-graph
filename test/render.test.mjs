@@ -58,6 +58,57 @@ const commit = (hash, parents, extra = {}) => ({
 // m fusiona f en a; f y a salen de b
 const history = [commit('m', ['a', 'f']), commit('f', ['b']), commit('a', ['b']), commit('b', [])]
 
+test('upstream compara refs locales: igualdad, ahead, behind, divergencia y estados sin comparación', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-upstream-'))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  const data = async () => JSON.parse((await buildPanel(repo)).match(/id="git-graph-data">([\s\S]*?)<\/script>/)[1])
+  const check = async expected => {
+    const panel = await data()
+    assert.equal(panel.error, '')
+    assert.deepEqual(panel.upstream, expected)
+    return panel
+  }
+  try {
+    git('init', '-b', 'main')
+    git('config', 'user.name', 'Test')
+    git('config', 'user.email', 'test@example.com')
+    const empty = await check({ state: 'unborn' })
+    assert.equal(empty.branch, 'main')
+    assert.deepEqual(empty.rows, [])
+    await writeFile(join(repo, 'new.txt'), 'pending')
+    assert.equal((await data()).rows[0].commit.wip, true)
+    git('add', 'new.txt')
+    git('commit', '-m', 'base')
+    const base = git('rev-parse', 'HEAD')
+    await check({ state: 'none' })
+    // An unreachable URL proves that reading the panel does not fetch.
+    git('remote', 'add', 'origin', join(repo, 'nonexistent-remote'))
+    git('config', 'branch.main.remote', 'origin')
+    git('config', 'branch.main.merge', 'refs/heads/release/different-name')
+    const ref = 'refs/remotes/origin/release/different-name'
+    const name = 'origin/release/different-name'
+    await check({ state: 'missing', name })
+    git('update-ref', ref, base)
+    await check({ state: 'tracked', name, ahead: 0, behind: 0 })
+    git('commit', '--allow-empty', '-m', 'local ahead')
+    const local = git('rev-parse', 'HEAD')
+    await check({ state: 'tracked', name, ahead: 1, behind: 0 })
+    const tree = git('rev-parse', 'HEAD^{tree}')
+    const remote = git('commit-tree', tree, '-p', local, '-m', 'remote ahead')
+    git('update-ref', ref, remote)
+    await check({ state: 'tracked', name, ahead: 0, behind: 1 })
+    git('commit', '--allow-empty', '-m', 'local divergence')
+    await check({ state: 'tracked', name, ahead: 1, behind: 1 })
+    assert.equal(git('rev-parse', ref), remote)
+    git('update-ref', '-d', ref)
+    await check({ state: 'missing', name })
+    git('switch', '--detach')
+    await check({ state: 'detached' })
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
 test('el worker carga el renderizador nuevo sin reiniciar y reutiliza revisiones idénticas', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'git-graph-reload-'))
   try {
