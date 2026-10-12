@@ -772,3 +772,61 @@ test('búsqueda, filtros, detalles y navegación funcionan sin romper el grafo',
     assert.deepEqual(errors, [])
   } finally { await browser.close() }
 })
+
+test('archivos y diffs permiten comparar padres y navegar con teclado bajo CSP en sidebar estrecha', { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 260, height: 720 } })
+    page.setDefaultTimeout(5000)
+    const errors = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    const file = { path: '--special & café [1].txt', oldPath: 'old\t\n<script>.txt', status: 'R100', binary: false, patch: 'diff --git a/old b/new\n@@ -1 +1 @@\n-before\n+</script><img src=x onerror=alert(1)>\n' }
+    const comparisons = [
+      { label: 'Padre 1: base-a', base: 'base-a', target: 'merge', files: [file, { path: 'binary.bin', status: 'M', binary: true, patch: '' }, { path: 'large.txt', status: 'A', binary: false, patch: '+large\n', notice: 'Diff recortado: máximo 16 KiB / 600 líneas por archivo.' }], notice: 'Lista recortada: máximo 100 archivos.' },
+      { label: 'Padre 2: base-b', base: 'base-b', target: 'merge', files: [{ path: 'other.txt', status: 'D', binary: false, patch: '-other\n' }] },
+    ]
+    const history = [{ ...commit('merge', ['base-a', 'base-b']), comparisons }, { ...commit('stash', ['base-a']), stash: 'stash@{0}', comparisons: [{ label: 'Stash: archivos sin seguimiento', base: null, target: 'snapshot', files: [{ ...file, oldPath: undefined, status: 'A' }] }] }, { ...commit('omitted', []), diffNotice: 'Comparación no precargada: límite del panel de 4 MiB.' }]
+    const html = renderHtml({ repo: '/repo', branch: 'main', head: 'merge', rows: layout(history) })
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="border:0;width:100%;height:700px"></iframe>')
+    await page.locator('#panel').evaluate((element, srcdoc) => { element.srcdoc = srcdoc }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${html}`)
+    const frame = page.frameLocator('#panel')
+    await frame.locator('tr[data-hash="merge"]').click()
+    await frame.getByRole('separator', { name: 'Ajustar altura de los detalles' }).press('End')
+    assert.equal(await frame.getByLabel('Comparación del diff').inputValue(), '0')
+    const summary = frame.locator('.commit-file summary').first()
+    await summary.focus()
+    await summary.press('Enter')
+    const patch = frame.getByRole('region', { name: 'Diff de --special & café [1].txt', exact: true })
+    assert.equal(await patch.isVisible(), true)
+    assert.match(await patch.innerText(), /<\/script><img src=x onerror=alert\(1\)>/)
+    assert.equal(await frame.locator('.commit-files img').count(), 0)
+    await patch.focus()
+    await patch.press('ArrowRight')
+    await frame.locator('.commit-file summary').filter({ hasText: 'binary.bin' }).press('Enter')
+    assert.equal(await frame.getByText('Archivo binario: no se muestra un diff de texto.', { exact: true }).isVisible(), true)
+    await frame.locator('.commit-file summary').filter({ hasText: 'large.txt' }).press('Enter')
+    assert.equal(await frame.getByText('Diff recortado: máximo 16 KiB / 600 líneas por archivo.', { exact: true }).isVisible(), true)
+    assert.equal(await frame.getByText('Lista recortada: máximo 100 archivos.', { exact: true }).isVisible(), true)
+    assert.equal(await frame.locator('body').evaluate(element => element.scrollWidth <= document.documentElement.clientWidth), true)
+    await frame.getByLabel('Comparación del diff').focus()
+    await frame.getByLabel('Comparación del diff').selectOption('1')
+    assert.equal(await frame.locator('.commit-file summary').count(), 1)
+    assert.match(await frame.locator('.commit-file summary').innerText(), /other.txt/)
+    await frame.locator('.commit-file summary').press('Enter')
+    assert.equal(await frame.getByRole('region', { name: 'Diff de other.txt' }).isVisible(), true)
+    await frame.locator('tr[data-hash="stash"]').click()
+    assert.equal(await frame.getByText('Stash: archivos sin seguimiento', { exact: true }).isVisible(), true)
+    assert.equal(await frame.getByLabel('Comparación del diff').count(), 0)
+    await frame.locator('tr[data-hash="omitted"]').click()
+    assert.equal(await frame.getByText('Comparación no precargada: límite del panel de 4 MiB.', { exact: true }).isVisible(), true)
+    await frame.getByRole('button', { name: 'Cerrar detalles' }).press('Escape')
+    assert.equal(await frame.locator('.details').count(), 0)
+    assert.equal(await frame.locator('tr[data-hash="omitted"]').evaluate(element => element === document.activeElement), true)
+    await frame.locator('tr[data-hash="merge"]').click()
+    assert.equal(await frame.getByLabel('Comparación del diff').inputValue(), '0')
+    await mkdir('test-artifacts', { recursive: true })
+    await page.screenshot({ path: 'test-artifacts/commit-files-diff.png' })
+    assert.deepEqual(errors, [])
+  } finally { await browser.close() }
+})

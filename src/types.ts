@@ -6,6 +6,9 @@ export interface Change {
 
 interface CommitBase {
   stash?: string
+  stashParents?: string[]
+  comparisons?: CommitComparison[]
+  diffNotice?: string
   hash: string
   parents: string[]
   refs: string[]
@@ -14,6 +17,23 @@ interface CommitBase {
   date: Date | null
   message?: string
   authorEmail?: string
+}
+
+export interface CommitFile {
+  path: string
+  oldPath?: string
+  status: string
+  patch: string
+  binary: boolean
+  notice?: string
+}
+
+export interface CommitComparison {
+  label: string
+  base: string | null
+  target: string
+  files: CommitFile[]
+  notice?: string
 }
 
 export interface GitCommit extends CommitBase {

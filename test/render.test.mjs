@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createRendererLoader } from '../src/renderer-loader.ts'
+import { DIFF_LIMITS, loadCommitDiffs, parseDiffFiles } from '../src/commit-diff.ts'
 
 import { buildPanel, groupRefs, layout, panelFingerprint, parseLog, parseStashes, parseStatus, renderHtml, runRepositoryAction, withStashes, wipCommit } from '../render.mjs'
 
@@ -237,6 +238,7 @@ test('los stashes conservan su etiqueta y solo se conectan al primer padre', () 
   const [stash] = parseStashes(record)
   assert.equal(stash.stash, 'stash@{1}')
   assert.deepEqual(stash.parents, ['a'])
+  assert.deepEqual(stash.stashParents, ['a', 'index', 'untracked'])
   assert.deepEqual(stash.refs, [])
   const rows = layout(withStashes([commit('a', [])], [stash]))
   assert.deepEqual(rows.map(row => row.commit.hash), ['s', 'a'])
@@ -396,4 +398,149 @@ test('git log conserva el mensaje completo y el email para los detalles', () => 
   const html = renderHtml({ repo: '/repo', branch: 'main', head: 'abc', rows: layout([commit]) })
   const json = html.match(/<script type="application\/json" id="git-graph-data">([\s\S]*?)<\/script>/)[1]
   assert.equal(JSON.parse(json).rows[0].commit.message, commit.message)
+})
+
+test('los metadatos NUL conservan rutas especiales y no aceptan registros incompletos', () => {
+  const header = ':100644 100644 aaaaa bbbbb R100'
+  const [file] = parseDiffFiles(`${header}\0old\t\nname\0:(glob)<script> & café\0`)
+  assert.equal(file.oldPath, 'old\t\nname')
+  assert.equal(file.path, ':(glob)<script> & café')
+  assert.equal(file.status, 'R100')
+  assert.deepEqual(parseDiffFiles(`${header}\0old\0incomplete`), [])
+})
+
+test('Git lee raíz, renombrados, binarios, cada padre de un merge y snapshots del stash', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-commit-diff-'))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  try {
+    git('init', '-b', 'main')
+    git('config', 'user.name', 'Ana')
+    git('config', 'user.email', 'ana@example.com')
+    git('config', 'core.autocrlf', 'false')
+    git('config', 'diff.external', 'invalid-external-diff-command')
+    git('config', 'diff.test.textconv', 'invalid-textconv-command')
+    await writeFile(join(repo, '.gitattributes'), '*.txt diff=test\n')
+    await writeFile(join(repo, '--odd & café [1].txt'), 'original\n')
+    await writeFile(join(repo, 'binary.bin'), Buffer.from([0, 255, 1, 2]))
+    git('add', '--', '.')
+    git('commit', '-m', 'root')
+    const root = git('rev-parse', 'HEAD')
+    git('mv', '--', '--odd & café [1].txt', 'renamed & café.txt')
+    git('commit', '-m', 'rename')
+    const renamed = git('rev-parse', 'HEAD')
+    git('checkout', '-b', 'topic')
+    await writeFile(join(repo, 'topic.txt'), 'topic\n')
+    git('add', '.')
+    git('commit', '-m', 'topic')
+    const topic = git('rev-parse', 'HEAD')
+    git('checkout', 'main')
+    await writeFile(join(repo, 'main.txt'), 'main\n')
+    git('add', '.')
+    git('commit', '-m', 'main')
+    const main = git('rev-parse', 'HEAD')
+    git('merge', '--no-ff', 'topic', '-m', 'merge')
+    const merge = git('rev-parse', 'HEAD')
+    await writeFile(join(repo, 'main.txt'), 'staged\n')
+    git('add', '--', 'main.txt')
+    await writeFile(join(repo, 'main.txt'), 'working\n')
+    await writeFile(join(repo, 'untracked.txt'), 'untracked\n')
+    git('stash', 'push', '-u', '-m', 'snapshot')
+    const stash = git('rev-parse', 'refs/stash')
+    const payload = JSON.parse((await buildPanel(repo)).match(/id="git-graph-data">([\s\S]*?)<\/script>/)[1])
+    assert.equal(payload.error, '')
+    const data = hash => payload.rows.find(row => row.commit.hash === hash).commit
+    const rootDiff = data(root).comparisons[0]
+    assert.equal(rootDiff.base, null)
+    assert.equal(rootDiff.files.find(file => file.path === 'binary.bin').binary, true)
+    assert.match(rootDiff.files.find(file => file.path === '--odd & café [1].txt').patch, /\+original/)
+    const rename = data(renamed).comparisons[0].files[0]
+    assert.equal(rename.oldPath, '--odd & café [1].txt')
+    assert.equal(rename.path, 'renamed & café.txt')
+    assert.equal(rename.status, 'R100')
+    assert.match(rename.patch, /rename from/)
+    const mergeDiffs = data(merge).comparisons
+    assert.deepEqual(mergeDiffs.map(diff => diff.base), [main, topic])
+    assert.deepEqual(mergeDiffs[0].files.map(file => file.path), ['topic.txt'])
+    assert.deepEqual(mergeDiffs[1].files.map(file => file.path), ['main.txt'])
+    const stashDiffs = data(stash).comparisons
+    assert.equal(stashDiffs.length, 3)
+    assert.match(stashDiffs[0].files[0].patch, /\+working/)
+    assert.match(stashDiffs[1].files[0].patch, /\+staged/)
+    assert.deepEqual(stashDiffs[2].files.map(file => file.path), ['untracked.txt'])
+    assert.equal(stashDiffs[2].base, null)
+    assert.deepEqual(data(stash).parents, [merge])
+    assert.ok(!payload.rows.some(row => row.commit.hash === stashDiffs[1].target))
+    const octopusHash = git('commit-tree', `${merge}^{tree}`, '-p', root, '-p', renamed, '-p', topic, '-p', main, '-p', merge, '-m', 'octopus')
+    const octopus = commit(octopusHash, [root, renamed, topic, main, merge])
+    await loadCommitDiffs(repo, [octopus])
+    assert.equal(octopus.comparisons.length, 4)
+    assert.match(octopus.diffNotice, /primeros 4 padres/)
+    const rootCommit = commit(root, [])
+    await loadCommitDiffs(repo, [rootCommit])
+    await rm(join(repo, '.git'), { recursive: true, force: true })
+    const cached = commit(root, [])
+    await loadCommitDiffs(repo, [cached])
+    assert.strictEqual(cached.comparisons[0].files, rootCommit.comparisons[0].files, 'no vuelve a ejecutar Git en el refresco')
+    const pending = [commit(root, []), commit(root, [])]
+    const originalNow = Date.now
+    const times = [0, 0, DIFF_LIMITS.loadMs + 1]
+    try {
+      Date.now = () => times.shift() ?? DIFF_LIMITS.loadMs + 1
+      await loadCommitDiffs(repo, pending)
+    } finally { Date.now = originalNow }
+    assert.equal(pending[0].comparisons.length, 1)
+    assert.equal(pending[1].comparisons.length, 0)
+    assert.match(pending[1].diffNotice, /15 segundos/)
+    await loadCommitDiffs(repo, pending)
+    assert.equal(pending[1].comparisons.length, 1)
+    assert.equal(pending[1].diffNotice, undefined)
+    const otherRepo = commit(root, [])
+    await loadCommitDiffs(join(repo, 'missing'), [otherRepo])
+    assert.equal(otherRepo.comparisons[0].files.length, 0, 'la caché no mezcla repositorios')
+    assert.ok(otherRepo.comparisons[0].notice)
+    const repeated = Array.from({ length: 301 }, () => commit(root, []))
+    await loadCommitDiffs(repo, repeated)
+    assert.equal(repeated[299].comparisons.length, 1)
+    assert.equal(repeated[300].comparisons.length, 0)
+    assert.match(repeated[300].diffNotice, /300 comparaciones/)
+  } finally { await rm(repo, { recursive: true, force: true }) }
+})
+
+test('listas y diffs grandes se recortan con avisos visibles y presupuesto de panel', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-diff-limits-'))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  try {
+    git('init', '-b', 'main')
+    git('config', 'user.name', 'Ana')
+    git('config', 'user.email', 'ana@example.com')
+    git('config', 'core.autocrlf', 'false')
+    await writeFile(join(repo, 'a-large.txt'), 'é😀'.repeat(100000))
+    for (let index = 0; index < 105; index++) await writeFile(join(repo, `file-${index}.txt`), 'small\n')
+    git('add', '.')
+    git('commit', '-m', 'large')
+    const hash = git('rev-parse', 'HEAD')
+    const item = commit(hash, [])
+    await loadCommitDiffs(repo, [item])
+    const diff = item.comparisons[0]
+    assert.equal(diff.files.length, DIFF_LIMITS.files)
+    assert.match(diff.notice, /100 archivos/)
+    assert.match(diff.notice, /64 KiB/)
+    assert.ok(diff.files[0].patch.length <= DIFF_LIMITS.patch)
+    assert.ok(Buffer.byteLength(diff.files[0].patch) <= DIFF_LIMITS.patch)
+    assert.ok(!diff.files[0].patch.includes('\uFFFD'), 'el recorte conserva caracteres UTF-8 completos')
+    assert.match(diff.files[0].notice, /recortado/)
+    assert.match(diff.files[1].notice, /no incluido/)
+    const repeated = Array.from({ length: 300 }, () => commit(hash, []))
+    await loadCommitDiffs(repo, repeated)
+    const bytes = repeated.reduce((sum, row) => sum + row.comparisons.reduce((total, comparison) => total + Buffer.byteLength(JSON.stringify(comparison)), 0), 0)
+    assert.ok(bytes <= DIFF_LIMITS.payload)
+    assert.match(repeated.at(-1).diffNotice, /4 MiB/)
+    await writeFile(join(repo, 'lines.txt'), Array.from({ length: 700 }, (_, index) => `line ${index}`).join('\n'))
+    git('add', '--', 'lines.txt')
+    git('commit', '-m', 'many lines')
+    const lines = commit(git('rev-parse', 'HEAD'), [hash])
+    await loadCommitDiffs(repo, [lines])
+    assert.match(lines.comparisons[0].files[0].notice, /600 líneas/)
+    assert.ok(lines.comparisons[0].files[0].patch.split('\n').length <= DIFF_LIMITS.lines)
+  } finally { await rm(repo, { recursive: true, force: true }) }
 })
