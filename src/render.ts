@@ -17,7 +17,7 @@ import { loadCommitDiffs } from './commit-diff.js'
 
 export { layout } from './graph-layout.js'
 export { resetHistory } from './history.js'
-import type { Change, Commit, GitCommit, GroupedRefs, LocalRef, PanelData, RenderOptions, UpstreamStatus, WorkingCommit } from './types.js'
+import type { Change, GitCommit, GraphRow, GroupedRefs, LocalRef, PanelData, RenderOptions, UpstreamStatus, WorkingCommit } from './types.js'
 
 const run = promisify(execFile)
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -29,15 +29,18 @@ const two = (n: number) => String(n).padStart(2, '0')
 export const formatDate = (d: Date): string =>
   `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}`
 
+type GitRunner = (repo: string, args: string[]) => Promise<string>
+
 async function git(repo: string, args: string[]): Promise<string> {
   const { stdout } = await run('git', args, { cwd: repo, maxBuffer: 16 * 1024 * 1024, timeout: 15000, windowsHide: true })
   return stdout
 }
+const runGit: GitRunner = git
 
 const exitedWith = (error: unknown, code: number): boolean =>
   error instanceof Error && 'code' in error && error.code === code
 
-async function readHead(repo: string): Promise<string> {
+async function readHead(repo: string, git: GitRunner = runGit): Promise<string> {
   try {
     return (await git(repo, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])).trim()
   } catch (error) {
@@ -158,7 +161,7 @@ export function groupRefs(refs: string[], remotes: string[] = []): GroupedRefs {
   return { heads, remotes: loose, tags }
 }
 
-async function readUpstream(repo: string, branch: string, head: string): Promise<UpstreamStatus> {
+async function readUpstream(repo: string, branch: string, head: string, git: GitRunner = runGit): Promise<UpstreamStatus> {
   if (!branch) return { state: 'detached' }
   if (!head) return { state: 'unborn' }
   const refs = await git(repo, ['for-each-ref', '--format=%(refname)%09%(upstream)%09%(upstream:short)', 'refs/heads/'])
@@ -226,65 +229,126 @@ export function renderHtml({ repo, branch, head, upstream, rows, remotes = [], n
 </body>
 </html>`
 }
-// Devuelve el HTML del repo; no escribe nada.
-export async function buildPanel(repo: string, historyState?: HistoryState): Promise<string> {
-  const now = new Date()
-  try {
-    // Validate the repository first, and only skip status for a bare repository.
-    const bare = (await git(repo, ['rev-parse', '--is-bare-repository'])).trim() === 'true'
-    const [stashLog, head, branch, status, remotes] = await Promise.all([
-      git(repo, ['stash', 'list', '-n251', `--format=%gd%x1f${LOG_FORMAT}`]),
-      readHead(repo),
-      git(repo, ['branch', '--show-current']),
-      // status sin bloqueos evita chocar con el Git de un agente.
-      bare ? Promise.resolve('') : git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z']),
-      git(repo, ['remote']),
-    ])
-    const parsedStashes = parseStashes(stashLog)
-    const stashes = parsedStashes.slice(0, HISTORY_PAGE)
-    const bases = [...new Set(stashes.flatMap(stash => stash.parents))]
-    const upstream = await readUpstream(repo, branch.trim(), head.trim())
-    const limit = historyState?.limit ?? HISTORY_PAGE
-    const log = await git(repo, ['log', '--branches', '--remotes', '--tags', ...(head ? ['HEAD'] : []), ...bases, '--date-order', `-n${limit + 1}`, `--format=${LOG_FORMAT}`])
-    const parsed = parseLog(log)
-    const history = parsed.slice(0, limit)
-    const hashes = new Set(history.map(commit => commit.hash))
-    const targets = [...new Set(historyState?.targets ?? [])].filter(target => !hashes.has(target))
-    if (targets.length) {
-      const parents = parseLog(await git(repo, ['log', '--no-walk=unsorted', '--ignore-missing', `--format=${LOG_FORMAT}`, ...targets]))
-      for (const parent of parents) {
-        if (!hashes.has(parent.hash)) { history.push(parent); hashes.add(parent.hash) }
-      }
-    }
-    const missingParent = targets.some(target => !hashes.has(target))
-    const ordered = orderHistory(withStashes(history, stashes))
-    await loadCommitDiffs(repo, ordered)
-    const commits: Commit[] = ordered
-    const changes = parseStatus(status)
-    if (changes.length) commits.unshift(wipCommit(changes, head.trim()))
-    return renderHtml({
-      repo,
-      branch: branch.trim() || '(HEAD detached)',
-      head: head.trim(),
-      upstream,
-      rows: layout(commits),
-      remotes: remotes.split('\n').map(r => r.trim()).filter(Boolean),
-      now,
-      history: {
-        session: historyState?.session ?? '', limit, count: history.length,
-        incomplete: parsed.length > limit || history.some(commit => commit.parents.some(parent => !hashes.has(parent))),
-        capped: limit >= HISTORY_MAX, focus: historyState?.focus,
-        notice: [
-          missingParent ? 'Algún padre solicitado no está disponible en Git local. Puede tratarse de un clon superficial; descarga su historial para recorrerlo.' : '',
-          parsedStashes.length > HISTORY_PAGE ? 'Solo se muestran los 250 stashes más recientes.' : '',
-        ].filter(Boolean).join(' ') || undefined,
-      },
-      unborn: !head,
-    })
-  } catch (e) {
-    return renderHtml({ repo, branch: '', head: '', rows: [], now, error: (e instanceof Error ? ('stderr' in e && typeof e.stderr === 'string' ? e.stderr : e.message) : String(e)).trim() })
-  }
+interface BuilderDependencies {
+  git: GitRunner
+  layout: typeof layout
+  loadCommitDiffs: typeof loadCommitDiffs
 }
+
+interface CachedHistory {
+  repo: string
+  key: string
+  commits: GitCommit[]
+  upstream: UpstreamStatus
+  count: number
+  incomplete: boolean
+  notice?: string
+  clean?: GraphRow[]
+  working?: GraphRow[]
+}
+
+// Solo se conserva el repo actual. Se consulta Git en cada refresco: ninguna
+// invalidación depende de watchers, mtimes del índice o ficheros de refs sueltas.
+export function createPanelBuilder(dependencies: BuilderDependencies = { git, layout, loadCommitDiffs }): {
+  build: (repo: string, historyState?: HistoryState, force?: boolean) => Promise<string>
+  invalidate: () => void
+} {
+  let cache: CachedHistory | undefined
+  let generation = 0
+  const invalidate = () => { generation++; cache = undefined }
+  const build = async (repo: string, historyState?: HistoryState, force = false): Promise<string> => {
+    if (force || cache?.repo !== repo) invalidate()
+    const currentGeneration = ++generation
+    const now = new Date()
+    try {
+      // Valida el repo antes de nada; solo un repo bare omite status.
+      const [bare = '', shallowPath = ''] = (await dependencies.git(repo, ['rev-parse', '--is-bare-repository', '--git-path', 'shallow']))
+        .trim().split('\n').map(line => line.trim())
+      const [stashLog, head, branch, refs, status, remotes] = await Promise.all([
+        dependencies.git(repo, ['stash', 'list', '-n251', `--format=%gd%x1f${LOG_FORMAT}`]),
+        readHead(repo, dependencies.git),
+        dependencies.git(repo, ['branch', '--show-current']),
+        // %(upstream) invalida también al cambiar la rama de seguimiento.
+        dependencies.git(repo, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(symref)%00%(upstream)', 'refs/heads', 'refs/remotes', 'refs/tags', 'refs/replace']),
+        // status sin bloqueos evita chocar con el Git de un agente.
+        bare === 'true' ? Promise.resolve('') : dependencies.git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all']),
+        dependencies.git(repo, ['remote']),
+      ])
+      // Un fetch --deepen puede ampliar el historial sin mover ninguna ref.
+      const shallow = shallowPath ? await readFile(resolve(repo, shallowPath), 'utf8').catch(error => {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return ''
+        throw error
+      }) : ''
+      const limit = historyState?.limit ?? HISTORY_PAGE
+      const targets = [...new Set(historyState?.targets ?? [])]
+      const key = JSON.stringify([head, branch, refs, stashLog, remotes, shallow, limit, targets])
+      let history = cache?.repo === repo && cache.key === key ? cache : undefined
+      if (!history) {
+        const parsedStashes = parseStashes(stashLog)
+        const stashes = parsedStashes.slice(0, HISTORY_PAGE)
+        const bases = [...new Set(stashes.flatMap(stash => stash.parents))]
+        const upstream = await readUpstream(repo, branch.trim(), head, dependencies.git)
+        const log = await dependencies.git(repo, ['log', '--branches', '--remotes', '--tags', ...(head ? ['HEAD'] : []), ...bases, '--date-order', `-n${limit + 1}`, `--format=${LOG_FORMAT}`])
+        const parsed = parseLog(log)
+        const commits = parsed.slice(0, limit)
+        const hashes = new Set(commits.map(commit => commit.hash))
+        const missing = targets.filter(target => !hashes.has(target))
+        if (missing.length) {
+          const parents = parseLog(await dependencies.git(repo, ['log', '--no-walk=unsorted', '--ignore-missing', `--format=${LOG_FORMAT}`, ...missing]))
+          for (const parent of parents) {
+            if (!hashes.has(parent.hash)) { commits.push(parent); hashes.add(parent.hash) }
+          }
+        }
+        const missingParent = missing.some(target => !hashes.has(target))
+        const ordered = orderHistory(withStashes(commits, stashes))
+        await dependencies.loadCommitDiffs(repo, ordered)
+        history = {
+          repo, key, commits: ordered, upstream, count: commits.length,
+          incomplete: parsed.length > limit || commits.some(commit => commit.parents.some(parent => !hashes.has(parent))),
+          notice: [
+            missingParent ? 'Algún padre solicitado no está disponible en Git local. Puede tratarse de un clon superficial; descarga su historial para recorrerlo.' : '',
+            parsedStashes.length > HISTORY_PAGE ? 'Solo se muestran los 250 stashes más recientes.' : '',
+          ].filter(Boolean).join(' ') || undefined,
+        }
+      }
+      const changes = parseStatus(status)
+      let rows: GraphRow[]
+      if (changes.length) {
+        const working = wipCommit(changes, head)
+        history.working ??= dependencies.layout([working, ...history.commits])
+        rows = [{ ...history.working[0], commit: working }, ...history.working.slice(1)]
+      } else {
+        history.clean ??= dependencies.layout(history.commits)
+        rows = history.clean
+      }
+      // Una lectura anterior no puede sustituir la caché de otro repo/refresco.
+      if (currentGeneration === generation) cache = history
+      return renderHtml({
+        repo,
+        branch: branch.trim() || '(HEAD detached)',
+        head,
+        upstream: history.upstream,
+        rows,
+        remotes: remotes.split('\n').map(r => r.trim()).filter(Boolean),
+        now,
+        history: {
+          session: historyState?.session ?? '', limit, count: history.count, incomplete: history.incomplete,
+          capped: limit >= HISTORY_MAX, focus: historyState?.focus, notice: history.notice,
+        },
+        unborn: !head,
+      })
+    } catch (e) {
+      if (currentGeneration === generation) invalidate()
+      return renderHtml({ repo, branch: '', head: '', rows: [], now, error: (e instanceof Error ? ('stderr' in e && typeof e.stderr === 'string' ? e.stderr : e.message) : String(e)).trim() })
+    }
+  }
+  return { build, invalidate }
+}
+
+const panelBuilder = createPanelBuilder()
+// Devuelve el HTML del repo; no escribe nada.
+export const buildPanel = panelBuilder.build
+export const invalidatePanelCache = panelBuilder.invalidate
 
 // Escribe panel.html solo si el grafo cambió (las horas no cuentan),
 // para que Orca no recargue el panel sin motivo.
@@ -297,13 +361,13 @@ export function panelFingerprint(html: string): string {
       return open + JSON.stringify(payload) + close
     })
 }
-export async function writePanel(repo: string, isCurrent?: () => Promise<boolean>, processHistoryRequest = false): Promise<boolean> {
+export async function writePanel(repo: string, isCurrent?: () => Promise<boolean>, processHistoryRequest = false, force = false): Promise<boolean> {
   const guard = isCurrent ?? (async () => true)
   if (!await guard()) return false
   if (!isCurrent && (await storedHistory())?.repo !== repo) await resetHistory(repo)
   await hideGeneratedPanelFromGit()
   const state = await (processHistoryRequest ? consumeHistoryRequest(repo) : readHistory(repo))
-  const html = await buildPanel(repo, state)
+  const html = await buildPanel(repo, state, force)
   const current = await readFile(PANEL_PATH, 'utf8').catch(() => '')
   if (panelFingerprint(current) === panelFingerprint(html)) return false
   if (!await guard()) return false
@@ -314,12 +378,14 @@ export async function writePanel(repo: string, isCurrent?: () => Promise<boolean
 }
 
 export async function resetPanel(): Promise<void> {
+  invalidatePanelCache()
   await resetHistory()
   await hideGeneratedPanelFromGit()
   await writeFile(PANEL_PATH, renderHtml({ repo: '', branch: '', head: '', rows: [] }))
 }
 
 export async function writeLoadingPanel(repo = ''): Promise<void> {
+  invalidatePanelCache()
   await hideGeneratedPanelFromGit()
   await writeFile(PANEL_PATH, renderHtml({ repo, branch: '', head: '', rows: [], loading: true }))
 }

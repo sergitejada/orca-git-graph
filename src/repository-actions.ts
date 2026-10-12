@@ -18,7 +18,7 @@ export async function runRepositoryAction(repo: string, action: 'refresh' | 'fet
     if (stdout) console.log(stdout.trimEnd())
     if (stderr) console.log(stderr.trimEnd())
   },
-  writePanel,
+  writePanel: (repo, isCurrent) => writePanel(repo, isCurrent, false, true),
 }): Promise<void> {
   if (!repo || !['refresh', 'fetch'].includes(action)) throw new Error('Acción o repositorio inválido.')
   const isCurrent = async () => await dependencies.readActiveRepo() === repo

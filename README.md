@@ -50,8 +50,8 @@ Un panel de plugin en Orca es un iframe aislado: no tiene red ni acceso a git. P
 
 | Pieza | Qué hace |
 | --- | --- |
-| `src/main.ts` / `src/focus.ts` | Worker del plugin (Node), compilado a `main.mjs`. Comprueba la selección de Orca cada segundo y cambia el repo al cambiar de proyecto o worktree. Refresca Git cada 4 s, con actividad o con **Git Graph: Refrescar**. |
-| `src/render.ts` | Ejecuta Git, calcula los carriles y renderiza React en el servidor. Compara tanto el HTML como los datos ignorando el reloj, para evitar recargas sin cambios. |
+| `src/main.ts` / `src/focus.ts` | Worker del plugin (Node), compilado a `main.mjs`. Comprueba la selección de Orca cada segundo, incluso durante un render pendiente, y cambia el repo al cambiar de proyecto o worktree. Refresca Git cada 4 s; agrupa la actividad en ventanas fijas de 250 ms. **Git Graph: Refrescar** fuerza una lectura completa. |
+| `src/render.ts` | Consulta Git en cada refresco y reutiliza historial y carriles cuando solo cambian archivos pendientes. Renderiza React en el servidor y compara HTML/datos ignorando el reloj, para evitar recargas sin cambios. |
 | `src/panel.tsx` | Componentes React tipados para la tabla, las etiquetas, el grafo SVG y pantalla completa. `src/panel.css` contiene los estilos y `src/client.tsx` hidrata la vista. |
 | `src/explore.ts` / `src/details.tsx` | Búsqueda y recorrido de ramas, filtros y panel de detalles. |
 | `src/types.ts` | Tipos compartidos de commits, cambios, carriles y datos del panel. |
@@ -61,6 +61,8 @@ Un panel de plugin en Orca es un iframe aislado: no tiene red ni acceso a git. P
 Orca carga los paneles mediante `srcdoc`, con una CSP que solo permite scripts y estilos inline. Por eso el panel no usa enlaces a JS/CSS locales ni una CDN. `render.mjs` es también la entrada compilada para generar el panel desde la terminal.
 
 El worktree mostrado es el **seleccionado en Orca**. Como la API pública de plugins todavía no devuelve su ruta, el worker lee el perfil activo de Orca en modo de solo lectura (`profile-state.db`, o `orca-data.json` en versiones anteriores). Recupera la selección al arrancar, sin depender del último agente activo. Si solo hay un proyecto seleccionado, utiliza su repositorio principal. La actividad de agentes en otros proyectos no cambia el repositorio mostrado. Las actualizaciones pendientes se descartan si cambia la selección antes de escribir el panel.
+
+El refresco automático vuelve a consultar HEAD, ramas locales/remotas y su rama de seguimiento, tags, configuración de remotas, los stashes y el estado de archivos (índice y archivos sin seguimiento incluidos). Si el historial y el rango cargado no cambian, evita `git log`, el upstream y los diffs, y conserva los carriles; cargar commits anteriores o un padre no cargado recalcula el historial. Calcula una variante con cambios pendientes y otra sin ellos cuando hacen falta. La caché solo conserva el repositorio actual y se invalida al cambiar de repo, recompilar el renderizador o refrescar manualmente. También detecta refs de reemplazo y cambios en los límites de un clon superficial. No usa watchers ni depende de las fechas de modificación de archivos Git, de modo que detecta cambios externos en el siguiente refresco. Los botones **Refrescar grafo** y **Fetch from remote** fuerzan también la lectura completa.
 
 ## Limitaciones
 

@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url'
 import { createRendererLoader } from '../src/renderer-loader.ts'
 import { DIFF_LIMITS, loadCommitDiffs, parseDiffFiles } from '../src/commit-diff.ts'
 
-import { buildPanel, groupRefs, layout, panelFingerprint, parseLog, parseStashes, parseStatus, renderHtml, runRepositoryAction, withStashes, wipCommit } from '../render.mjs'
+import { buildPanel, createPanelBuilder, groupRefs, layout, panelFingerprint, parseLog, parseStashes, parseStatus, renderHtml, runRepositoryAction, withStashes, wipCommit } from '../render.mjs'
 
 test('refresh y fetch comprueban la selección y descartan el resultado si cambia', async () => {
   let selected = '/repo'
@@ -58,6 +58,179 @@ const commit = (hash, parents, extra = {}) => ({
 
 // m fusiona f en a; f y a salen de b
 const history = [commit('m', ['a', 'f']), commit('f', ['b']), commit('a', ['b']), commit('b', [])]
+
+function cachedBuilder() {
+  const state = { head: 'a\n', branch: 'main\n', refs: 'main a', stash: '', status: '', remotes: 'origin\n' }
+  const calls = []
+  let layouts = 0
+  let failStatus = false
+  let beforeLog = async () => {}
+  const record = `${['a', '', 'HEAD -> main', 'base', 'Ana', '1767261600', 'ana@example.com', 'base'].join('\x1f')}\x1e`
+  const builder = createPanelBuilder({
+    git: async (repo, args) => {
+      calls.push({ repo, args })
+      if (args[0] === 'log') { await beforeLog(repo); return record }
+      if (args[0] === 'stash') return state.stash
+      if (args[0] === 'rev-parse') return args.includes('--is-bare-repository') ? 'false\n.git/shallow\n' : state.head
+      if (args[0] === 'branch') return state.branch
+      // readUpstream solo consulta refs/heads/ cuando se recalcula el historial.
+      if (args[0] === 'for-each-ref') return args.includes('refs/heads/') ? '' : state.refs
+      if (args[0] === '--no-optional-locks') {
+        if (failStatus) throw new Error('index read failed')
+        return state.status
+      }
+      if (args[0] === 'remote') return state.remotes
+      throw new Error(`unexpected Git: ${args}`)
+    },
+    layout: commits => { layouts++; return layout(commits) },
+    loadCommitDiffs: async () => {},
+  })
+  return { ...builder, state, calls, layouts: () => layouts, logs: () => calls.filter(call => call.args[0] === 'log').length,
+    failStatus: value => { failStatus = value }, beforeLog: handler => { beforeLog = handler } }
+}
+
+const payloadOf = html => JSON.parse(html.match(/id="git-graph-data">([\s\S]*?)<\/script>/)[1])
+
+test('refrescos normales consultan Git y reutilizan historial y ambos layouts para índice/untracked', async () => {
+  const b = cachedBuilder()
+  await b.build('/a')
+  assert.equal(b.calls.length, 9)
+  assert.equal(b.layouts(), 1)
+  await b.build('/a')
+  assert.equal(b.calls.length, 16, 'siete consultas actuales, sin upstream ni git log')
+  assert.equal(b.layouts(), 1)
+  b.state.status = '?? directory/untracked.txt\0'
+  const working = payloadOf(await b.build('/a'))
+  assert.equal(working.rows[0].commit.changes[0].path, 'directory/untracked.txt')
+  assert.equal(b.layouts(), 2)
+  b.state.status = 'A  directory/untracked.txt\0 M tracked.txt\0'
+  const staged = payloadOf(await b.build('/a'))
+  assert.equal(staged.rows[0].commit.changes[0].x, 'A')
+  assert.deepEqual(staged.rows.slice(1), working.rows.slice(1))
+  assert.equal(b.layouts(), 2, 'cambiar paths/índice conserva carriles')
+  b.state.status = ''
+  await b.build('/a')
+  assert.equal(b.layouts(), 2, 'recupera layout limpio')
+  assert.equal(b.logs(), 1)
+  assert.ok(b.calls.filter(call => call.args[0] === '--no-optional-locks').every(call => call.args.includes('--untracked-files=all')))
+})
+
+test('invalida por HEAD, rama, refs locales/remotas/tags, remotas, stash completo, rango, repo y manual', async () => {
+  const b = cachedBuilder()
+  await b.build('/a')
+  const mutations = [
+    () => { b.state.head = 'b\n' },
+    () => { b.state.branch = 'other\n' },
+    () => { b.state.refs += '\nrefs/heads/new b' },
+    () => { b.state.refs += '\nrefs/remotes/origin/main b' },
+    () => { b.state.refs += '\nrefs/tags/v1 b' },
+    () => { b.state.remotes = 'upstream\n' },
+    () => { b.state.stash = `stash@{0}\x1f${['s', 'a index', '', 'stash', 'Ana', '1767261600', 'a@b', 'stash'].join('\x1f')}\x1e` },
+    // Cambia un stash antiguo sin mover la punta de refs/stash.
+    () => { b.state.stash += b.state.stash.replace('stash@{0}', 'stash@{1}').replace('\x1fs\x1f', '\x1fold\x1f') },
+    () => { b.state.stash = '' },
+  ]
+  for (const mutate of mutations) {
+    const logs = b.logs()
+    mutate()
+    await b.build('/a')
+    assert.equal(b.logs(), logs + 1)
+    await b.build('/a')
+    assert.equal(b.logs(), logs + 1)
+  }
+  let logs = b.logs()
+  const range = { repo: '/a', session: 's', limit: 500, targets: [] }
+  await b.build('/a', range)
+  await b.build('/a', range)
+  await b.build('/a', { ...range, targets: ['b'.repeat(40)] })
+  assert.equal(b.logs(), logs + 3, 'cada rango recalcula el historial y busca el padre solicitado')
+  logs = b.logs()
+  await b.build('/b')
+  await b.build('/a')
+  assert.equal(b.logs(), logs + 2)
+  logs = b.logs()
+  await b.build('/a', undefined, true)
+  b.invalidate()
+  await b.build('/a')
+  assert.equal(b.logs(), logs + 2)
+})
+
+test('una lectura antigua concurrente no repone la caché de un repo abandonado', async () => {
+  const b = cachedBuilder()
+  let finish
+  const gate = new Promise(resolve => { finish = resolve })
+  b.beforeLog(repo => repo === '/a' ? gate : Promise.resolve())
+  const old = b.build('/a')
+  await new Promise(resolve => setImmediate(resolve))
+  await b.build('/b')
+  finish()
+  await old
+  const logs = b.logs()
+  await b.build('/b')
+  assert.equal(b.logs(), logs)
+  await b.build('/a')
+  assert.equal(b.logs(), logs + 1)
+})
+
+test('un fallo leyendo índice no se presenta como árbol limpio y permite reintentar sin caché', async () => {
+  const b = cachedBuilder()
+  await b.build('/a')
+  b.failStatus(true)
+  assert.equal(payloadOf(await b.build('/a')).error, 'index read failed')
+  b.failStatus(false)
+  b.state.status = 'M  tracked.txt\0'
+  assert.equal(payloadOf(await b.build('/a')).rows[0].commit.changes[0].x, 'M')
+  assert.equal(b.logs(), 2)
+})
+
+test('Git externo: índice, untracked, refs empaquetadas y fetch --deepen sin mover HEAD', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'git-graph-cache-'))
+  const source = join(directory, 'source')
+  const repo = join(directory, 'clone')
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true })
+  let logs = 0
+  const builder = createPanelBuilder({
+    git: async (cwd, args) => { if (args[0] === 'log') logs++; return git(cwd, ...args) },
+    layout,
+    loadCommitDiffs,
+  })
+  try {
+    await mkdir(source)
+    git(source, 'init', '-b', 'main')
+    git(source, 'config', 'user.name', 'Ana')
+    git(source, 'config', 'user.email', 'ana@example.com')
+    for (let i = 0; i < 3; i++) {
+      await writeFile(join(source, 'tracked.txt'), String(i))
+      git(source, 'add', '.')
+      git(source, 'commit', '-m', `commit ${i}`)
+    }
+    git(directory, 'clone', '--depth=1', pathToFileURL(source).href, repo)
+    const head = git(repo, 'rev-parse', 'HEAD')
+    assert.equal(payloadOf(await builder.build(repo)).rows.length, 1)
+    await mkdir(join(repo, 'new'))
+    await writeFile(join(repo, 'new', 'untracked.txt'), 'new')
+    let payload = payloadOf(await builder.build(repo))
+    assert.deepEqual(payload.rows[0].commit.changes, [{ x: '?', y: '?', path: 'new/untracked.txt' }])
+    git(repo, 'add', 'new/untracked.txt')
+    payload = payloadOf(await builder.build(repo))
+    assert.equal(payload.rows[0].commit.changes[0].x, 'A')
+    assert.equal(logs, 1)
+    git(repo, 'branch', 'external')
+    git(repo, 'tag', 'external-tag')
+    git(repo, 'pack-refs', '--all', '--prune')
+    payload = payloadOf(await builder.build(repo))
+    assert.ok(payload.rows.some(row => row.commit.refs.includes('external') && row.commit.refs.includes('tag: external-tag')))
+    assert.equal(logs, 2)
+    git(repo, 'fetch', '--deepen=1')
+    assert.equal(git(repo, 'rev-parse', 'HEAD'), head)
+    payload = payloadOf(await builder.build(repo))
+    assert.equal(payload.rows.filter(row => !row.commit.wip).length, 2)
+    assert.equal(logs, 3)
+    git(repo, 'checkout', '--detach')
+    assert.equal(payloadOf(await builder.build(repo)).branch, '(HEAD detached)')
+    assert.equal(logs, 4)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
 
 test('upstream compara refs locales: igualdad, ahead, behind, divergencia y estados sin comparación', async () => {
   const repo = await mkdtemp(join(tmpdir(), 'orca-upstream-'))
@@ -218,18 +391,22 @@ test('el worker carga el renderizador nuevo sin reiniciar y reutiliza revisiones
   const directory = await mkdtemp(join(tmpdir(), 'git-graph-reload-'))
   try {
     const path = join(directory, 'render.mjs')
-    const firstSource = 'export const writePanel = async () => true; export const resetPanel = async () => {}; export const writeLoadingPanel = async () => {}'
+    const firstSource = 'export let invalidations = 0; export const invalidatePanelCache = () => { invalidations++ }; export const writePanel = async () => true; export const resetPanel = async () => {}; export const writeLoadingPanel = async () => {}'
     await writeFile(path, firstSource)
     const load = createRendererLoader(pathToFileURL(path))
     const first = await load()
+    assert.equal(first.invalidations, 1)
     assert.equal(await first.writePanel('/repo'), true)
     assert.equal(await load(), first)
+    assert.equal(first.invalidations, 1)
     await writeFile(path, firstSource.replace('=> true', '=> false'))
     const second = await load()
+    assert.equal(second.invalidations, 1)
     assert.notEqual(second, first)
     assert.equal(await second.writePanel('/repo'), false)
     await writeFile(path, firstSource)
     assert.equal(await load(), first)
+    assert.equal(first.invalidations, 2, 'volver a una revisión anterior también invalida su caché')
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
 

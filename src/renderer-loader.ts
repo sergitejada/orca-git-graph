@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
-type Renderer = Pick<typeof import('./render.js'), 'writePanel' | 'resetPanel' | 'writeLoadingPanel' | 'resetHistory'>
+type Renderer = Pick<typeof import('./render.js'), 'writePanel' | 'resetPanel' | 'writeLoadingPanel' | 'resetHistory'> & {
+  invalidatePanelCache?: () => void
+}
 
 // Node cachea imports por URL. La revisión del contenido permite cargar el
 // renderizador recién compilado sin reiniciar el worker ni crear otro timer.
@@ -14,7 +16,10 @@ export function createRendererLoader(url: URL): () => Promise<Renderer> {
       const versioned = new URL(url)
       versioned.searchParams.set('revision', next)
       revision = next
-      renderer = import(versioned.href) as Promise<Renderer>
+      renderer = (import(versioned.href) as Promise<Renderer>).then(loaded => {
+        loaded.invalidatePanelCache?.()
+        return loaded
+      })
       const current = renderer
       void current.catch(() => { if (renderer === current) renderer = null })
     }
