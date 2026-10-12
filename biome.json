@@ -13,7 +13,7 @@
       "!render.mjs",
       "!panel.html",
       "!panel.runtime.html",
-      "!agents/**",
+      "!agents",
       "!node_modules",
       "!dist",
       "!build",

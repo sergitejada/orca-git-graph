@@ -24,7 +24,8 @@ export function ancestorsOf(rows: PanelRow[], branch: string): Set<string> {
   const pending = rows.filter(row => row.commit.refs.some(ref => branchName(ref) === branch)).map(row => row.commit.hash)
   const ancestors = new Set<string>()
   while (pending.length) {
-    const hash = pending.pop()!
+    const hash = pending.pop()
+    if (hash === undefined) break
     if (ancestors.has(hash)) continue
     ancestors.add(hash)
     pending.push(...(byHash.get(hash)?.parents || []))
@@ -39,6 +40,7 @@ export function findMatches(rows: PanelRow[], filters: Filters): Set<string> {
     if (ancestors && !ancestors.has(commit.hash) && !((commit.wip || commit.stash) && commit.parents.some(parent => ancestors.has(parent)))) return false
     if (filters.author && (commit.wip || commit.author !== filters.author)) return false
     if (filters.mergesOnly && (commit.wip || commit.parents.length < 2)) return false
+    if (!terms.length) return true
     const text = [commit.subject, commit.message, commit.author, commit.authorEmail, commit.hash, commit.stash, ...commit.refs,
       ...(commit.wip ? commit.changes.map(change => change.path) : [])].join(' ').toLocaleLowerCase()
     return terms.every(term => text.includes(term))

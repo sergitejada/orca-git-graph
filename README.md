@@ -6,18 +6,19 @@ Plugin de [Orca](https://github.com/stablyai/orca) que añade a la sidebar derec
 - Carriles con la paleta de Git Graph y curvas donde una rama sale o se fusiona.
 - Fila **Cambios sin confirmar (N)** arriba, unida a HEAD con una línea gris.
 - Stashes existentes con etiqueta `stash@{n}`, icono y mensaje, unidos a su commit base sin mostrar los snapshots internos del índice. Se pueden buscar, filtrar y seleccionar para ver sus detalles.
-- Al hacer clic derecho sobre la etiqueta del stash: menú para aplicar, crear rama, aplicar y eliminar (pop), eliminar (drop), copiar nombre o copiar hash. El clic izquierdo en la fila abre sus detalles. Las acciones de Git se ejecutan en una terminal de shell elegida por el usuario, con Node y Git en el PATH; el resultado se muestra en esa terminal. Orca requiere los permisos `workspace:read` y `terminal:send`.
+- Al hacer clic derecho sobre la etiqueta del stash (o `Shift+F10` con la etiqueta enfocada): menú para aplicar, crear rama, aplicar y eliminar (pop), eliminar (drop), copiar nombre o copiar hash. El clic izquierdo en la fila abre sus detalles. Las acciones de Git se ejecutan en una terminal de shell elegida por el usuario, con Node y Git en el PATH; el resultado se muestra en esa terminal. Orca requiere los permisos `workspace:read` y `terminal:send`.
 - Etiquetas de rama y tag con icono; la remota del mismo nombre va dentro de la etiqueta local (`main | origin`).
 - Al pasar el ratón: hash completo, autor, fecha y mensaje; en los cambios sin confirmar, los ficheros.
 - Botón **Pantalla completa** en la cabecera para ampliar el grafo; `Esc` permite salir.
 - Muestra ramas locales, remotas, tags y HEAD (`git log --branches --remotes --tags HEAD`), sin refs internas como checkpoints de agentes.
-- Búsqueda por mensaje completo, autor, email, hash, refs y rutas sin confirmar. `/` enfoca el buscador.
-- Filtros por rama, autor y merges; la rama incluye sus antepasados dentro del historial cargado. Los commits que no coinciden se atenúan para conservar las conexiones reales del grafo.
+- Botones con iconos de nube y flecha circular en la cabecera: **Fetch from remote** ejecuta `git fetch --all` y actualiza el grafo; **Refrescar grafo** vuelve a leer Git. Ambos piden una terminal de shell libre en Orca, con Node y Git en el PATH, y muestran el resultado en esa terminal. Comprueban la selección antes de actuar y descartan el panel si cambia mientras se ejecutan. Usan los permisos existentes `workspace:read` y `terminal:send`, porque el bridge del panel no permite invocar comandos del worker.
+- Búsqueda por mensaje completo, autor, email, hash, refs y rutas sin confirmar. La lupa abre el buscador; `/` lo abre y enfoca. El botón **Cerrar búsqueda** lo oculta, limpia el texto y devuelve el foco a la lupa.
+- La lupa y el icono de filtros están junto a fetch y refresh en la cabecera. Filtros por rama, autor y merges; la rama incluye sus antepasados dentro del historial cargado. Los commits que no coinciden se atenúan para conservar las conexiones reales del grafo. Un punto en el icono indica que hay filtros activos.
 - Selector de ramas siempre visible, con búsqueda de ramas locales y remotas y la opción **Todas las ramas**. Se puede usar con `↑`/`↓`, `Enter` y `Esc`.
-- Selección de commits con detalles: mensaje completo, autor, fecha, hash copiable y navegación a sus padres.
+- Selección de commits con detalles en un panel inferior de altura ajustable: mensaje completo, autor, fecha, hash copiable y navegación a sus padres. Arrastra el separador o enfócalo y usa `↑`/`↓` para ajustar la altura; `Home`/`End` llevan al mínimo/máximo. El historial y los detalles tienen scroll independiente.
 - Detalles de los cambios sin confirmar, con todos los ficheros y su estado.
 - El repositorio sigue al proyecto y worktree seleccionados en Orca, aunque no haya agentes trabajando.
-- **Ir a HEAD**, navegación entre coincidencias con los botones o `↑`/`↓`, y `Esc` para cerrar los detalles.
+- Icono de diana **Ir a HEAD** junto a fetch, refresh, búsqueda y filtros. La cabecera muestra la hora de actualización sin contadores de commits o stashes. Navegación entre coincidencias con los botones o `↑`/`↓`, y `Esc` para cerrar los detalles.
 
 ## Requisitos
 
@@ -49,7 +50,7 @@ Un panel de plugin en Orca es un iframe aislado: no tiene red ni acceso a git. P
 | `src/panel.tsx` | Componentes React tipados para la tabla, las etiquetas, el grafo SVG y pantalla completa. `src/panel.css` contiene los estilos y `src/client.tsx` hidrata la vista. |
 | `src/explore.ts` / `src/details.tsx` | Búsqueda y recorrido de ramas, filtros y panel de detalles. |
 | `src/types.ts` | Tipos compartidos de commits, cambios, carriles y datos del panel. |
-| `src/build.ts` | Comprueba TypeScript en modo estricto y compila `main.mjs` y `render.mjs`. Los bundles incluyen React y los assets del navegador. Los `.mjs` de la raíz se generan; se editan los fuentes de `src/`. |
+| `src/build.ts` | Comprueba TypeScript en modo estricto, compila `main.mjs` y `render.mjs` y actualiza el panel local con la selección de Orca. Publica los bundles completos para que el worker no lea archivos a medio escribir. Los `.mjs` de la raíz se generan; se editan los fuentes de `src/`. |
 | `panel.html` | HTML generado con el render inicial, los datos serializados, el CSS y el bundle React inline. El worker lo marca como `skip-worktree`. |
 
 Orca carga los paneles mediante `srcdoc`, con una CSP que solo permite scripts y estilos inline. Por eso el panel no usa enlaces a JS/CSS locales ni una CDN. `render.mjs` es también la entrada compilada para generar el panel desde la terminal.
@@ -68,9 +69,9 @@ El worktree mostrado es el **seleccionado en Orca**. Como la API pública de plu
 
 ```bash
 npm install
-npm run build                # comprueba los tipos y compila TypeScript/React
+npm run build                # comprueba tipos, compila y actualiza el panel local
 npm run typecheck            # solo comprueba los tipos
-npm run lint                 # analiza el código con Biome
+npm run lint                 # analiza el código con Biome; falla también con avisos
 npm run lint:fix             # aplica las correcciones seguras del linter
 npm test                     # recompila y ejecuta los tests del grafo/HTML
 npm run test:browser         # iframe sandbox + CSP, estilos e hidratación (Edge)
@@ -82,9 +83,11 @@ El worker marca `panel.html` como `skip-worktree` automáticamente antes de actu
 
 El repositorio usa pnpm: instala las dependencias con `pnpm install` y ejecuta los scripts con `pnpm run <script>` (por ejemplo, `pnpm run lint`).
 
-El linter usa [Biome](https://biomejs.dev/linter/), configurado en `biome.json`, y respeta `.gitignore`. Se excluyen los bundles, el HTML generado y las skills. Algunas reglas se mantienen como avisos para incorporar el linter al código existente; puedes exigir que fallen con `pnpm run lint --error-on-warnings`. La comprobación de dependencias tiene una excepción en `src/render.ts` porque `panel-assets` es un módulo virtual creado por esbuild. `lint:fix` aplica solo correcciones seguras del linter, sin reformatear ni organizar imports.
+El linter usa [Biome](https://biomejs.dev/linter/), configurado en `biome.json`, y respeta `.gitignore`. Se excluyen los bundles, el HTML generado y las skills. `lint` exige que no haya errores ni avisos. La configuración del formatter conserva las comillas simples, los dos espacios de indentación y la ausencia de punto y coma. La comprobación de dependencias tiene una excepción en `src/render.ts` porque `panel-assets` es un módulo virtual creado por esbuild. Las opciones del selector de ramas tienen excepciones locales documentadas: el foco y el teclado se gestionan en el combobox mediante `aria-activedescendant`. `lint:fix` aplica solo correcciones seguras del linter, sin reformatear ni organizar imports.
 
-Después de recompilar, recarga el plugin en Orca para reiniciar el worker con el nuevo bundle. La prueba de navegador usa Edge instalado; se puede seleccionar otro Chromium con `PLAYWRIGHT_BROWSER_CHANNEL` o `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`. Su captura queda en `test-artifacts/`.
+`pnpm run build` actualiza el HTML del panel al terminar. El worker carga `render.mjs` por una revisión de su contenido y detecta las nuevas compilaciones en el siguiente refresco (hasta 4 s), sin restaurar la interfaz anterior ni crear otro worker. Los cambios en componentes, estilos y lógica del renderizador no necesitan desactivar y activar el plugin. Los cambios en el propio worker (`src/main.ts` o `src/focus.ts`) sí requieren recargarlo en Orca; también hace falta una recarga al instalar por primera vez esta versión con recarga del renderizador. `pnpm test` compila sin actualizar el panel local. Si el perfil de Orca no está disponible, la compilación termina con un aviso y el worker actualiza el panel cuando puede leer la selección.
+
+La prueba de navegador usa Edge instalado; se puede seleccionar otro Chromium con `PLAYWRIGHT_BROWSER_CHANNEL` o `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`. Su captura queda en `test-artifacts/`.
 
 ## Licencia
 

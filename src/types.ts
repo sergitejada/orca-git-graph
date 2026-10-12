@@ -61,6 +61,7 @@ export interface PanelRefs {
 export interface PanelData {
   repo: string
   repoPath?: string
+  actionModule?: string
   branch: string
   head: string
   rows: PanelRow[]

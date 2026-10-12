@@ -6,6 +6,12 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { stashCommand, type StashAction } from '../src/stash-actions.js'
 
+function commandScript(command: string): string {
+  const match = command.match(/Buffer.from\('([^']+)'/)
+  assert.ok(match, 'El comando debe contener el script codificado en base64')
+  return Buffer.from(match[1], 'base64').toString('utf8')
+}
+
 for (const action of ['apply', 'pop', 'drop', 'branch'] as StashAction[]) {
   test(`stash ${action}: ejecuta Git sobre el hash elegido aunque cambie su índice`, async () => {
     const repo = await mkdtemp(join(tmpdir(), 'orca-stash-action-'))
@@ -25,7 +31,7 @@ for (const action of ['apply', 'pop', 'drop', 'branch'] as StashAction[]) {
       await writeFile(join(repo, 'file.txt'), 'stash nuevo')
       git('stash', 'push', '-m', 'nuevo')
       const latest = git('rev-parse', 'refs/stash')
-      const script = Buffer.from(command.match(/Buffer.from\('([^']+)'/)![1], 'base64').toString('utf8')
+      const script = commandScript(command)
       execFileSync(process.execPath, ['-e', script], { encoding: 'utf8', windowsHide: true })
       assert.equal(await readFile(join(repo, 'file.txt'), 'utf8'), action === 'drop' ? 'base' : 'stash elegido')
       const remaining = git('stash', 'list', '--format=%H').split('\n')
@@ -57,7 +63,7 @@ test('pop conserva el stash cuando su aplicación provoca conflictos', async () 
     await writeFile(join(repo, 'file.txt'), 'otro cambio\n')
     git('commit', '-am', 'otro cambio')
     const command = stashCommand(repo, hash, 'pop')
-    const script = Buffer.from(command.match(/Buffer.from\('([^']+)'/)![1], 'base64').toString('utf8')
+    const script = commandScript(command)
     assert.throws(() => execFileSync(process.execPath, ['-e', script], { windowsHide: true, stdio: 'pipe' }))
     assert.equal(git('rev-parse', 'refs/stash'), hash)
     assert.ok(git('status', '--porcelain').includes('UU file.txt'))

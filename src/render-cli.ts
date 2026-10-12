@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { resetPanel, writePanel } from './render.js'
 
 export * from './render.js'
+export { runRepositoryAction } from './repository-actions.js'
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (process.argv[2] === '--reset') {

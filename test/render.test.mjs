@@ -4,8 +4,46 @@ import { execFileSync } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { createRendererLoader } from '../src/renderer-loader.ts'
 
-import { buildPanel, groupRefs, layout, panelFingerprint, parseLog, parseStashes, parseStatus, renderHtml, withStashes, wipCommit } from '../render.mjs'
+import { buildPanel, groupRefs, layout, panelFingerprint, parseLog, parseStashes, parseStatus, renderHtml, runRepositoryAction, withStashes, wipCommit } from '../render.mjs'
+
+test('refresh y fetch comprueban la selección y descartan el resultado si cambia', async () => {
+  let selected = '/repo'
+  let failFetch = false
+  let switchDuringFetch = false
+  const calls = []
+  const dependencies = {
+    readActiveRepo: async () => selected,
+    fetch: async repo => {
+      calls.push(['fetch', repo])
+      if (failFetch) throw new Error('remote unavailable')
+      if (switchDuringFetch) selected = '/other'
+    },
+    writePanel: async (repo, isCurrent) => {
+      if (!await isCurrent()) return false
+      calls.push(['publish', repo])
+      return true
+    },
+  }
+  await runRepositoryAction('/repo', 'refresh', dependencies)
+  assert.deepEqual(calls.splice(0), [['publish', '/repo']])
+  await runRepositoryAction('/repo', 'fetch', dependencies)
+  assert.deepEqual(calls.splice(0), [['fetch', '/repo'], ['publish', '/repo']])
+  selected = '/other'
+  await assert.rejects(runRepositoryAction('/repo', 'fetch', dependencies), /seleccionado ha cambiado/)
+  assert.deepEqual(calls, [])
+  selected = '/repo'
+  switchDuringFetch = true
+  await runRepositoryAction('/repo', 'fetch', dependencies)
+  assert.deepEqual(calls.splice(0), [['fetch', '/repo']])
+  selected = '/repo'
+  switchDuringFetch = false
+  failFetch = true
+  await assert.rejects(runRepositoryAction('/repo', 'fetch', dependencies), /remote unavailable/)
+  assert.deepEqual(calls, [['fetch', '/repo']])
+})
 
 const commit = (hash, parents, extra = {}) => ({
   hash,
@@ -20,8 +58,27 @@ const commit = (hash, parents, extra = {}) => ({
 // m fusiona f en a; f y a salen de b
 const history = [commit('m', ['a', 'f']), commit('f', ['b']), commit('a', ['b']), commit('b', [])]
 
+test('el worker carga el renderizador nuevo sin reiniciar y reutiliza revisiones idénticas', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'git-graph-reload-'))
+  try {
+    const path = join(directory, 'render.mjs')
+    const firstSource = 'export const writePanel = async () => true; export const resetPanel = async () => {}; export const writeLoadingPanel = async () => {}'
+    await writeFile(path, firstSource)
+    const load = createRendererLoader(pathToFileURL(path))
+    const first = await load()
+    assert.equal(await first.writePanel('/repo'), true)
+    assert.equal(await load(), first)
+    await writeFile(path, firstSource.replace('=> true', '=> false'))
+    const second = await load()
+    assert.notEqual(second, first)
+    assert.equal(await second.writePanel('/repo'), false)
+    await writeFile(path, firstSource)
+    assert.equal(await load(), first)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
 test('los stashes conservan su etiqueta y solo se conectan al primer padre', () => {
-  const record = ['stash@{1}', 's', 'a index untracked', 'refs/stash', 'On main: prueba', 'Ana', '1767261600', 'ana@example.com', 'On main: prueba\n'].join('\x1f') + '\x1e'
+  const record = `${['stash@{1}', 's', 'a index untracked', 'refs/stash', 'On main: prueba', 'Ana', '1767261600', 'ana@example.com', 'On main: prueba\n'].join('\x1f')}\x1e`
   const [stash] = parseStashes(record)
   assert.equal(stash.stash, 'stash@{1}')
   assert.deepEqual(stash.parents, ['a'])
@@ -32,7 +89,7 @@ test('los stashes conservan su etiqueta y solo se conectan al primer padre', () 
   assert.equal(rows[1].hasIncoming, true)
   const html = renderHtml({ repo: '/repo', branch: 'main', head: 'a', rows })
   assert.ok(html.includes('<span class="name">stash@{1}</span>'))
-  assert.ok(html.includes('1 commit<!-- --> · 1 stash'))
+  assert.ok(!html.includes('<span class="sub">'), 'sin hora no se muestra un resumen de commits o stashes')
 })
 
 test('Git carga todos los stashes y sus bases fuera de las ramas, sin snapshots internos', async () => {
@@ -132,7 +189,7 @@ test('los cambios sin confirmar van arriba, unidos a HEAD con línea gris', () =
   assert.ok(html.includes('<b>Cambios sin confirmar (2)</b>'))
   assert.ok(html.includes('<span class="clock">11 oct 2026 23:12</span>'))
   assert.ok(html.includes('1 sin preparar · 1 sin seguimiento'))
-  assert.ok(html.includes('3 commits'), 'la fila ficticia no cuenta como commit')
+  assert.ok(!html.includes('3 commits'), 'la cabecera no muestra el contador de commits')
   // salida del nodo, paso por la fila de f y llegada a HEAD
   assert.equal(html.match(/<path [^>]*stroke="#808080"/g).length, 3)
   // el nodo hueco es el de los cambios sin confirmar; HEAD se marca en la descripción
@@ -177,7 +234,7 @@ test('el reloj no provoca recargas; los cambios reales del grafo sí', () => {
 })
 
 test('git log conserva el mensaje completo y el email para los detalles', () => {
-  const log = ['abc', 'parent', 'HEAD -> main', 'Asunto', 'Ana', '1767261600', 'ana@example.com', 'Asunto\n\nCuerpo con varias líneas\nSegunda línea\n'].join('\x1f') + '\x1e'
+  const log = `${['abc', 'parent', 'HEAD -> main', 'Asunto', 'Ana', '1767261600', 'ana@example.com', 'Asunto\n\nCuerpo con varias líneas\nSegunda línea\n'].join('\x1f')}\x1e`
   const [commit] = parseLog(log)
   assert.equal(commit.message, 'Asunto\n\nCuerpo con varias líneas\nSegunda línea')
   assert.equal(commit.authorEmail, 'ana@example.com')

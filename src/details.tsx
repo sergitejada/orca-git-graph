@@ -27,7 +27,7 @@ export function Details({ row, loadedHashes, onClose, onJump }: DetailsProps) {
     }
   }
 
-  return <aside className="details" aria-label="Detalles del commit">
+  return <aside id="commit-details" className="details" aria-label="Detalles del commit">
     <div className="details-heading"><h2>{commit.wip ? 'Cambios sin confirmar' : commit.stash ? `Stash ${commit.stash}` : 'Detalles del commit'}</h2><button type="button" onClick={onClose} aria-label="Cerrar detalles" title="Cerrar detalles (Esc)">✕</button></div>
     <h3>{commit.subject}</h3>
     {commit.wip ? <>

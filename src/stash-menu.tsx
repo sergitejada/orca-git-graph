@@ -23,6 +23,8 @@ interface StashMenuProps {
 
 export function StashMenu({ name, hash, repo, left, top, onClose, onNotice }: StashMenuProps) {
   const menu = useRef<HTMLDivElement>(null)
+  const branchInput = useRef<HTMLInputElement>(null)
+  const terminalSelect = useRef<HTMLSelectElement>(null)
   const [position, setPosition] = useState({ left, top })
   const [action, setAction] = useState<StashAction | null>(null)
   const [terminals, setTerminals] = useState<string[]>([])
@@ -30,6 +32,12 @@ export function StashMenu({ name, hash, repo, left, top, onClose, onNotice }: St
   const [branch, setBranch] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!action || loading) return
+    if (action === 'branch') branchInput.current?.focus()
+    else terminalSelect.current?.focus()
+  }, [action, loading])
 
   useLayoutEffect(() => {
     const element = menu.current
@@ -41,12 +49,12 @@ export function StashMenu({ name, hash, repo, left, top, onClose, onNotice }: St
 
   useEffect(() => {
     const outside = (event: PointerEvent) => { if (!action && !menu.current?.contains(event.target as Node)) onClose() }
-    const escape = (event: KeyboardEvent) => {
+    const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); if (!loading) onClose() }
     }
     document.addEventListener('pointerdown', outside)
-    document.addEventListener('keydown', escape, true)
-    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape, true) }
+    document.addEventListener('keydown', handleEscape, true)
+    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', handleEscape, true) }
   }, [action, loading, onClose])
 
   const choose = async (selected: typeof actions[number]['action']) => {
@@ -91,8 +99,8 @@ export function StashMenu({ name, hash, repo, left, top, onClose, onNotice }: St
     <h2>{actions.find(item => item.action === action)?.label}</h2>
     <p><b>{name}</b> · <code>{hash.slice(0, 8)}</code></p>
     <p>{action === 'drop' ? 'Se eliminará este stash.' : action === 'pop' ? 'Se aplicarán sus cambios y se eliminará el stash si la aplicación termina correctamente.' : action === 'branch' ? 'Se creará una rama desde su commit base, se aplicará el stash y se eliminará si la aplicación termina correctamente.' : 'Se aplicarán sus cambios y se conservará el stash.'}</p>
-    {action === 'branch' ? <label>Nueva rama<input autoFocus value={branch} onChange={event => setBranch(event.target.value)} /></label> : null}
-    <label>Terminal de shell<select autoFocus={action !== 'branch'} value={terminal} onChange={event => setTerminal(event.target.value)} disabled={loading}><option value="">Selecciona una terminal…</option>{terminals.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
+    {action === 'branch' ? <label>Nueva rama<input ref={branchInput} value={branch} onChange={event => setBranch(event.target.value)} /></label> : null}
+    <label>Terminal de shell<select ref={terminalSelect} value={terminal} onChange={event => setTerminal(event.target.value)} disabled={loading}><option value="">Selecciona una terminal…</option>{terminals.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
     <p className="detail-muted">Elige una shell libre, sin un agente ni otro proceso ejecutándose. La acción usa Git y Node en el repositorio mostrado.</p>
     <p className="stash-repo">{repo}</p>
     {loading ? <p role="status">Esperando a Orca…</p> : null}

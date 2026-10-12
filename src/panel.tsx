@@ -5,6 +5,7 @@ import { branchesOf, emptyFilters, findMatches } from './explore.js'
 import { Details } from './details.js'
 import { BranchSelector } from './branch-selector.js'
 import { StashMenu } from './stash-menu.js'
+import { RepositoryActionDialog } from './repository-action-dialog.js'
 
 const x = (lane: number) => PAD + lane * LANE
 const curve = (x1: number, y1: number, x2: number, y2: number) => {
@@ -84,6 +85,7 @@ interface CommitRowProps {
 
 function CommitRow({ row, head, refs, graphRows, matches, selected, focusable, onSelect, onStashContextMenu, onRowRef }: CommitRowProps) {
   const { commit } = row
+  const stash = commit.stash
   const title = commit.wip
     ? (() => {
       const count = (predicate: (change: Change) => boolean, one: string, many: string) => {
@@ -108,11 +110,18 @@ function CommitRow({ row, head, refs, graphRows, matches, selected, focusable, o
     <td className="desc">{commit.wip ? <b>{`${commit.subject} (${commit.changes.length})`}</b> : <>
       {commit.hash === head && <span className="head-dot" style={{ borderColor: color(row.col) }} title="HEAD" />}
       <Refs refs={refs} />
-      {commit.stash ? <span className="ref stash" onContextMenu={event => {
+      {stash ? <button type="button" className="ref stash" aria-label={`Acciones de ${stash}`} aria-haspopup="menu" onKeyDown={event => {
+        if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+          event.preventDefault()
+          event.stopPropagation()
+          const rect = event.currentTarget.getBoundingClientRect()
+          onStashContextMenu(commit.hash, stash, rect.left, rect.bottom)
+        }
+      }} onContextMenu={event => {
         event.preventDefault()
         event.stopPropagation()
-        onStashContextMenu(commit.hash, commit.stash!, event.clientX, event.clientY)
-      }}><span className="ico" style={{ background: color(row.col) }}><StashIcon /></span><span className="name">{commit.stash}</span></span> : null}
+        onStashContextMenu(commit.hash, stash, event.clientX, event.clientY)
+      }}><span className="ico" style={{ background: color(row.col) }}><StashIcon /></span><span className="name">{stash}</span></button> : null}
       <span className="subject">{commit.subject}</span>
     </>}</td>
     <td className="date">{commit.wip ? <span className="clock">{commit.dateLabel}</span> : commit.dateLabel}</td>
@@ -132,12 +141,19 @@ export function Panel(data: PanelData) {
   return <LoadedPanel {...data} />
 }
 
-function LoadedPanel({ repo, repoPath = '', branch, head, rows, refsByCommit, now, error }: PanelData) {
+function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows, refsByCommit, now, error }: PanelData) {
+  const [repositoryAction, setRepositoryAction] = useState<'refresh' | 'fetch' | null>(null)
+  const actionButton = useRef<HTMLButtonElement | null>(null)
+  const [showSearch, setShowSearch] = useState(false)
+  const searchButton = useRef<HTMLButtonElement>(null)
   const [stashMenu, setStashMenu] = useState<{ hash: string; name: string; left: number; top: number } | null>(null)
   const [notice, setNotice] = useState('')
   const [filters, setFilters] = useState(emptyFilters)
   const [showFilters, setShowFilters] = useState(false)
   const [selectedHash, setSelectedHash] = useState<string | null>(null)
+  const [detailsHeight, setDetailsHeight] = useState(40)
+  const workspace = useRef<HTMLDivElement>(null)
+  const resizeStart = useRef<{ y: number; height: number; available: number } | null>(null)
   const [focusHash, setFocusHash] = useState(rows.some(row => row.commit.hash === head) ? head : rows[0]?.commit.hash || '')
   const searchInput = useRef<HTMLInputElement>(null)
   const rowElements = useRef(new Map<string, HTMLTableRowElement>())
@@ -149,6 +165,13 @@ function LoadedPanel({ repo, repoPath = '', branch, head, rows, refsByCommit, no
   const authors = useMemo(() => [...new Set(rows.filter(row => !row.commit.wip).map(row => row.commit.author))].sort(), [rows])
   const filterCount = Number(Boolean(filters.branch)) + Number(Boolean(filters.author)) + Number(filters.mergesOnly)
   const filtered = Boolean(filters.query.trim() || filterCount)
+  const resizeDetails = (height: number) => setDetailsHeight(Math.min(75, Math.max(20, height)))
+
+  useEffect(() => { if (showSearch) searchInput.current?.focus() }, [showSearch])
+
+  useEffect(() => {
+    if (selectedHash) rowElements.current.get(selectedHash)?.scrollIntoView({ block: 'nearest' })
+  }, [selectedHash])
 
   const selectHash = (hash: string) => {
     setSelectedHash(hash)
@@ -171,42 +194,49 @@ function LoadedPanel({ repo, repoPath = '', branch, head, rows, refsByCommit, no
   }
   useEffect(() => {
     const shortcuts = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectedHash(null)
+      if (event.key === 'Escape') {
+        setSelectedHash(null)
+        if (selectedHash) rowElements.current.get(selectedHash)?.focus({ preventScroll: true })
+      }
       const target = event.target as HTMLElement | null
       if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !target?.closest('input, select, textarea, [contenteditable]')) {
         event.preventDefault()
+        setShowSearch(true)
         searchInput.current?.focus()
       }
     }
     document.addEventListener('keydown', shortcuts)
     return () => document.removeEventListener('keydown', shortcuts)
-  }, [])
-  const commits = rows.filter(row => !row.commit.wip && !row.commit.stash).length
-  const stashes = rows.filter(row => row.commit.stash).length
+  }, [selectedHash])
   return <>
     <header>
       <span><span className="label">Repo:</span> <b>{repo || '—'}</b></span>
       <span><span className="label">Rama:</span> <b>{branch || '—'}</b></span>
-      <span className="sub">{`${commits} ${commits === 1 ? 'commit' : 'commits'}`}{stashes ? ` · ${stashes} ${stashes === 1 ? 'stash' : 'stashes'}` : ''}{now ? <> · actualizado <span className="clock">{now}</span></> : null}</span>
+      {now ? <span className="sub">actualizado <span className="clock">{now}</span></span> : null}
+      <div className="header-actions">
+        <button type="button" className="icon-button" aria-label="Fetch from remote" title="Fetch from remote" disabled={!repoPath || !actionModule} onClick={event => { actionButton.current = event.currentTarget; setRepositoryAction('fetch') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17H5a4 4 0 0 1-.5-8A6 6 0 0 1 16 7a5 5 0 0 1 3 10h-2M12 11v10m-4-4 4 4 4-4" /></svg></button>
+        <button type="button" className="icon-button" aria-label="Refrescar grafo" title="Refrescar grafo" disabled={!repoPath || !actionModule} onClick={event => { actionButton.current = event.currentTarget; setRepositoryAction('refresh') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8a8 8 0 1 1-5-4M15 1v4h4" /></svg></button>
+        {rows.length ? <>
+          <button type="button" className="icon-button" aria-label="Ir a HEAD" title="Ir a HEAD" disabled={!loadedHashes.has(head)} onClick={() => selectHash(head)}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v3m0 14v3M2 12h3m14 0h3" /></svg></button>
+          <button ref={searchButton} type="button" className="icon-button" aria-label="Abrir búsqueda" title="Buscar commits (/)" aria-expanded={showSearch} aria-controls="commit-search" onClick={() => { setShowSearch(true); searchInput.current?.focus() }}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 6 6" /></svg></button>
+          <button type="button" className="icon-button" aria-label="Filtros" title={filterCount ? `Filtros (${filterCount})` : 'Filtros'} aria-expanded={showFilters} aria-controls="history-filters" data-active={filterCount > 0 || undefined} onClick={() => setShowFilters(!showFilters)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18l-7 8v7l-4 2v-9Z" /></svg>{filterCount ? <span className="filter-indicator" aria-label={`${filterCount} filtros activos`} /> : null}</button>
+        </> : null}
+      </div>
     </header>
     {error ? <div className="error">{error}</div> : null}
     {notice ? <p className="stash-notice" role="status">{notice}</p> : null}
     {!error && !rows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
     {rows.length ? <>
       <div className="branch-toolbar"><BranchSelector branches={branches} value={filters.branch} onChange={branch => setFilters({ ...filters, branch })} /></div>
-      <div className="toolbar" aria-label="Explorar historial">
-        <input ref={searchInput} type="search" aria-label="Buscar commits" placeholder="Buscar mensaje, autor, hash… (/)" value={filters.query} onChange={event => setFilters({ ...filters, query: event.target.value })} />
-        <button type="button" aria-expanded={showFilters} onClick={() => setShowFilters(!showFilters)}>Filtros{filterCount ? ` (${filterCount})` : ''}</button>
-        <button type="button" disabled={!loadedHashes.has(head)} onClick={() => selectHash(head)}>Ir a HEAD</button>
-        {filtered ? <button type="button" onClick={() => setFilters(emptyFilters)}>Limpiar</button> : null}
-      </div>
-      {showFilters ? <div className="filter-options">
+      {filtered ? <fieldset className="toolbar" aria-label="Explorar historial"><button type="button" onClick={() => setFilters(emptyFilters)}>Limpiar</button></fieldset> : null}
+      {showSearch ? <div className="search-toolbar" id="commit-search"><input ref={searchInput} type="search" aria-label="Buscar commits" placeholder="Buscar mensaje, autor, hash… (/)" value={filters.query} onChange={event => setFilters({ ...filters, query: event.target.value })} /><button type="button" aria-label="Cerrar búsqueda" title="Cerrar búsqueda" onClick={() => { setShowSearch(false); setFilters({ ...filters, query: '' }); searchButton.current?.focus() }}>×</button></div> : null}
+      {showFilters ? <div className="filter-options" id="history-filters">
         <label>Autor<select aria-label="Filtrar por autor" value={filters.author} onChange={event => setFilters({ ...filters, author: event.target.value })}><option value="">Todos los autores</option>{authors.map(name => <option key={name} value={name}>{name}</option>)}</select></label>
         <label className="merge-filter"><input type="checkbox" checked={filters.mergesOnly} onChange={event => setFilters({ ...filters, mergesOnly: event.target.checked })} />Solo merges</label>
       </div> : null}
       <div className="results-bar"><span role="status">{filtered ? `${matchingRows.length} coincidencias · contexto visible` : `${rows.length} filas`}</span><div><button type="button" aria-label="Coincidencia anterior" disabled={!matchingRows.length} onClick={() => navigate(-1)}>↑</button><button type="button" aria-label="Coincidencia siguiente" disabled={!matchingRows.length} onClick={() => navigate(1)}>↓</button></div></div>
       {filtered && !matchingRows.length ? <div className="hint no-matches">Sin coincidencias. Cambia la búsqueda o limpia los filtros.</div> : null}
-      <div className={`workspace${selected ? ' details-open' : ''}`}>
+      <div ref={workspace} className={`workspace${selected ? ' details-open' : ''}`} style={selected ? { gridTemplateRows: `minmax(0, ${100 - detailsHeight}fr) 8px minmax(0, ${detailsHeight}fr)` } : undefined}>
       <div className="graph-list"><table onKeyDown={tableKeyDown} aria-label="Historial de commits">
       <thead><tr><th className="graph" style={{ minWidth: 12 + Math.max(28, 2 * PAD + (Math.max(1, ...rows.map(row => Math.max(row.before.length, row.after.length))) - 1) * LANE) }}>Grafo</th><th className="desc">Descripción</th><th className="date">Fecha</th><th className="author">Autor</th><th className="hash">Commit</th></tr></thead>
       <tbody>{rows.map((row, index) => <CommitRow key={row.commit.hash || index} row={row} head={head} refs={refsByCommit[row.commit.hash] || { heads: [], remotes: [], tags: [] }} graphRows={index === 0 ? rows : null} matches={matches} selected={selectedHash === row.commit.hash} focusable={focusHash === row.commit.hash} onSelect={hash => {
@@ -218,10 +248,30 @@ function LoadedPanel({ repo, repoPath = '', branch, head, rows, refsByCommit, no
         setStashMenu({ hash, name, left, top })
       }} onRowRef={element => { if (element) rowElements.current.set(row.commit.hash, element); else rowElements.current.delete(row.commit.hash) }} />)}</tbody>
       </table></div>
-      {selected ? <Details key={selected.commit.hash} row={selected} loadedHashes={loadedHashes} onClose={() => { setSelectedHash(null); rowElements.current.get(selected.commit.hash)?.focus({ preventScroll: true }) }} onJump={selectHash} /> : null}
+      {selected ? <>
+        <div className="details-resizer" role="separator" tabIndex={0} aria-label="Ajustar altura de los detalles" aria-orientation="horizontal" aria-controls="commit-details" aria-valuemin={20} aria-valuemax={75} aria-valuenow={Math.round(detailsHeight)} aria-valuetext={`${Math.round(detailsHeight)}% del panel`} onPointerDown={event => {
+          if (event.button !== 0 || !workspace.current) return
+          event.preventDefault()
+          event.currentTarget.focus()
+          event.currentTarget.setPointerCapture(event.pointerId)
+          resizeStart.current = { y: event.clientY, height: detailsHeight, available: Math.max(1, workspace.current.clientHeight - 8) }
+        }} onPointerMove={event => {
+          const start = resizeStart.current
+          if (start) resizeDetails(start.height + (start.y - event.clientY) / start.available * 100)
+        }} onPointerUp={event => {
+          resizeStart.current = null
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+        }} onPointerCancel={() => { resizeStart.current = null }} onLostPointerCapture={() => { resizeStart.current = null }} onKeyDown={event => {
+          if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+          event.preventDefault()
+          resizeDetails(event.key === 'Home' ? 20 : event.key === 'End' ? 75 : detailsHeight + (event.key === 'ArrowUp' ? 5 : -5))
+        }} />
+        <Details key={selected.commit.hash} row={selected} loadedHashes={loadedHashes} onClose={() => { setSelectedHash(null); rowElements.current.get(selected.commit.hash)?.focus({ preventScroll: true }) }} onJump={selectHash} />
+      </> : null}
       </div>
     </> : null}
     {stashMenu ? <StashMenu key={stashMenu.hash} {...stashMenu} repo={repoPath} onNotice={setNotice} onClose={() => { setStashMenu(null); rowElements.current.get(stashMenu.hash)?.focus({ preventScroll: true }) }} /> : null}
+    {repositoryAction ? <RepositoryActionDialog action={repositoryAction} repo={repoPath} module={actionModule} onNotice={setNotice} onClose={() => { setRepositoryAction(null); actionButton.current?.focus() }} /> : null}
   </>
 }
 

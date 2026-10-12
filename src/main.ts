@@ -1,5 +1,7 @@
 import { readActiveRepo } from './focus.js'
-import { resetPanel, writeLoadingPanel, writePanel } from './render.js'
+import { createRendererLoader } from './renderer-loader.js'
+
+const loadRenderer = createRendererLoader(new URL('./render.mjs', import.meta.url))
 
 interface Orca {
   log(message: string): void
@@ -24,7 +26,14 @@ export interface WorkerDependencies {
 }
 
 export default function activate(orca: Orca, dependencies: WorkerDependencies = {
-  readActiveRepo, writePanel, resetPanel, writeLoadingPanel, now: Date.now, setInterval,
+  readActiveRepo,
+  writePanel: async (repo, isCurrent) => {
+    const renderer = await loadRenderer()
+    return renderer.writePanel(repo, async () => await loadRenderer() === renderer && await isCurrent())
+  },
+  resetPanel: async () => (await loadRenderer()).resetPanel(),
+  writeLoadingPanel: async repo => (await loadRenderer()).writeLoadingPanel(repo),
+  now: Date.now, setInterval,
 }): void {
   let repo: string | null | undefined
   let lastRefresh = 0

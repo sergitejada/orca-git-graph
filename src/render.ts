@@ -188,6 +188,7 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
   const payload: PanelData = {
     repo: repo ? basename(resolve(repo)) : '',
     repoPath: repo ? resolve(repo) : '',
+    actionModule: new URL('./render.mjs', import.meta.url).href,
     branch: branch || '',
     head,
     rows: rows.map(row => {
