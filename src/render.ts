@@ -32,6 +32,28 @@ async function git(repo: string, args: string[]): Promise<string> {
   return stdout
 }
 
+const exitedWith = (error: unknown, code: number): boolean =>
+  error instanceof Error && 'code' in error && error.code === code
+
+async function readHead(repo: string): Promise<string> {
+  try {
+    return (await git(repo, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])).trim()
+  } catch (error) {
+    if (!exitedWith(error, 1)) throw error
+    // Unborn HEAD must point to a local branch whose ref does not yet exist.
+    // An existing but broken ref, detached HEAD or other Git failure is an error.
+    const ref = (await git(repo, ['symbolic-ref', 'HEAD'])).trim()
+    if (!ref.startsWith('refs/heads/')) throw error
+    try {
+      await git(repo, ['show-ref', '--verify', '--quiet', ref])
+    } catch (refError) {
+      if (exitedWith(refError, 1)) return ''
+      throw refError
+    }
+    throw error
+  }
+}
+
 async function hideGeneratedPanelFromGit() {
   try {
     await git(HERE, ['update-index', '--skip-worktree', '--', 'panel.html'])
@@ -134,7 +156,7 @@ export function groupRefs(refs: string[], remotes: string[] = []): GroupedRefs {
   return { heads, remotes: loose, tags }
 }
 
-export function renderHtml({ repo, branch, head, rows, remotes = [], now = null, error, loading = false }: RenderOptions): string {
+export function renderHtml({ repo, branch, head, rows, remotes = [], now = null, error, loading = false, unborn = false }: RenderOptions): string {
   const refsByCommit = Object.fromEntries(rows.map(row => {
     const laneColor = PALETTE[row.col % PALETTE.length]
     const refs = groupRefs(row.commit.refs, remotes)
@@ -158,6 +180,7 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
     now: now ? now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '',
     error: error || '',
     loading,
+    unborn,
   }
   const app = renderToString(React.createElement(Panel, payload))
   const serialized = JSON.stringify(payload)
@@ -184,18 +207,19 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
 export async function buildPanel(repo: string): Promise<string> {
   const now = new Date()
   try {
+    // Validate the repository first, and only skip status for a bare repository.
+    const bare = (await git(repo, ['rev-parse', '--is-bare-repository'])).trim() === 'true'
     const [stashLog, head, branch, status, remotes] = await Promise.all([
       git(repo, ['stash', 'list', `--format=%gd%x1f${LOG_FORMAT}`]),
-      git(repo, ['rev-parse', 'HEAD']),
+      readHead(repo),
       git(repo, ['branch', '--show-current']),
-      // sin --no-optional-locks, status refresca el índice y puede chocar
-      // con el git de un agente; en un repo bare falla y se ignora
-      git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z']).catch(() => ''),
-      git(repo, ['remote']).catch(() => ''),
+      // status sin bloqueos evita chocar con el Git de un agente.
+      bare ? Promise.resolve('') : git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z']),
+      git(repo, ['remote']),
     ])
     const stashes = parseStashes(stashLog)
     const bases = [...new Set(stashes.flatMap(stash => stash.parents))]
-    const log = await git(repo, ['log', '--branches', '--remotes', '--tags', 'HEAD', ...bases, '--date-order', `-n${LIMIT}`, `--format=${LOG_FORMAT}`])
+    const log = await git(repo, ['log', '--branches', '--remotes', '--tags', ...(head ? ['HEAD'] : []), ...bases, '--date-order', `-n${LIMIT}`, `--format=${LOG_FORMAT}`, '--'])
     const commits: Commit[] = withStashes(parseLog(log), stashes)
     const changes = parseStatus(status)
     if (changes.length) commits.unshift(wipCommit(changes, head.trim()))
@@ -206,6 +230,7 @@ export async function buildPanel(repo: string): Promise<string> {
       rows: layout(commits),
       remotes: remotes.split('\n').map(r => r.trim()).filter(Boolean),
       now,
+      unborn: !head,
     })
   } catch (e) {
     return renderHtml({ repo, branch: '', head: '', rows: [], now, error: (e instanceof Error ? ('stderr' in e && typeof e.stderr === 'string' ? e.stderr : e.message) : String(e)).trim() })

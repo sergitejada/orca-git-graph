@@ -1,13 +1,73 @@
 import assert from 'node:assert/strict'
-import { mkdir } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { chromium } from 'playwright-core'
-import { layout, renderHtml, wipCommit } from '../render.mjs'
+import { buildPanel, layout, renderHtml, wipCommit } from '../render.mjs'
 
 // Reproduce el sandbox y la CSP de src/shared/plugins/plugin-panel-shell.ts de Orca.
 const csp = "default-src 'none'; connect-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
 const commit = (hash, parents, refs = []) => ({ hash, parents, refs, subject: `commit ${hash}`, author: 'Ana', date: new Date(2026, 0, 1, 10, 0) })
+
+test('Git real: la vista sin commits se hidrata y pasa al primer commit sin conexiones inventadas', { timeout: 30000 }, async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-unborn-browser-'))
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  try {
+    git('init', '-b', 'first/branch')
+    git('config', 'user.name', 'Ana')
+    git('config', 'user.email', 'ana@example.com')
+    const page = await browser.newPage({ viewport: { width: 360, height: 720 } })
+    page.setDefaultTimeout(5000)
+    const errors = []
+    const requests = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    page.on('request', request => requests.push(request.url()))
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="border:0;width:100%;height:700px"></iframe>')
+    const show = async () => page.locator('#panel').evaluate((element, srcdoc) => { element.srcdoc = srcdoc }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${await buildPanel(repo)}`)
+    const frame = page.frameLocator('#panel')
+    await show()
+    await frame.getByRole('status').getByText(/No hay archivos pendientes del primer commit/).waitFor()
+    assert.equal(await frame.locator('header b').nth(1).textContent(), 'first/branch')
+    assert.equal(await frame.locator('table, .error, .graph').count(), 0)
+
+    await writeFile(join(repo, 'staged.txt'), 'first\n')
+    git('add', '--', 'staged.txt')
+    await writeFile(join(repo, 'pending.txt'), 'pending\n')
+    await show()
+    await frame.getByRole('status').getByText('Archivos pendientes del primer commit.', { exact: false }).waitFor()
+    assert.equal(await frame.locator('tbody tr').count(), 1)
+    assert.equal(await frame.locator('.graph path').count(), 0)
+    assert.equal(await frame.locator('.graph circle').count(), 1)
+    assert.equal(await frame.getByRole('button', { name: 'Ir a HEAD' }).isDisabled(), true)
+    await frame.locator('tr[data-hash="WORKING_TREE"]').press('Enter')
+    await frame.locator('.changes-list').getByText('staged.txt', { exact: true }).waitFor()
+    await frame.locator('.changes-list').getByText('pending.txt', { exact: true }).waitFor()
+    await frame.getByRole('button', { name: 'Abrir búsqueda' }).click()
+    await frame.getByLabel('Buscar commits').fill('pending.txt')
+    assert.equal(await frame.locator('tr.wip.dimmed').count(), 0)
+    assert.equal(await frame.locator('body').evaluate(element => element.scrollWidth <= document.documentElement.clientWidth), true)
+    await mkdir('test-artifacts', { recursive: true })
+    await page.screenshot({ path: 'test-artifacts/unborn-repository.png' })
+
+    git('-c', 'commit.gpgsign=false', 'commit', '-m', 'First commit')
+    await show()
+    await frame.getByText('First commit', { exact: true }).waitFor()
+    assert.equal(await frame.getByText(/todavía no tiene commits/).count(), 0)
+    assert.equal(await frame.locator('tbody tr').count(), 2)
+    assert.equal(await frame.locator('.graph path').count(), 2)
+    await frame.getByRole('button', { name: 'Ir a HEAD' }).click()
+    assert.equal(await frame.getByLabel('Hash completo').inputValue(), git('rev-parse', 'HEAD'))
+    assert.deepEqual(errors, [])
+    assert.deepEqual(requests, [])
+  } finally {
+    await browser.close()
+    await rm(repo, { recursive: true, force: true })
+  }
+})
 
 test('restaura una instantánea validada después de reemplazar el iframe opaco, sin almacenamiento ni bridge', { timeout: 30000 }, async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true })
