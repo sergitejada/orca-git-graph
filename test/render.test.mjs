@@ -59,6 +59,161 @@ const commit = (hash, parents, extra = {}) => ({
 // m fusiona f en a; f y a salen de b
 const history = [commit('m', ['a', 'f']), commit('f', ['b']), commit('a', ['b']), commit('b', [])]
 
+test('upstream compara refs locales: igualdad, ahead, behind, divergencia y estados sin comparación', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-upstream-'))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  const data = async () => JSON.parse((await buildPanel(repo)).match(/id="git-graph-data">([\s\S]*?)<\/script>/)[1])
+  const check = async expected => {
+    const panel = await data()
+    assert.equal(panel.error, '')
+    assert.deepEqual(panel.upstream, expected)
+    return panel
+  }
+  try {
+    git('init', '-b', 'main')
+    git('config', 'user.name', 'Test')
+    git('config', 'user.email', 'test@example.com')
+    const empty = await check({ state: 'unborn' })
+    assert.equal(empty.branch, 'main')
+    assert.deepEqual(empty.rows, [])
+    await writeFile(join(repo, 'new.txt'), 'pending')
+    assert.equal((await data()).rows[0].commit.wip, true)
+    git('add', 'new.txt')
+    git('commit', '-m', 'base')
+    const base = git('rev-parse', 'HEAD')
+    await check({ state: 'none' })
+    // An unreachable URL proves that reading the panel does not fetch.
+    git('remote', 'add', 'origin', join(repo, 'nonexistent-remote'))
+    git('config', 'branch.main.remote', 'origin')
+    git('config', 'branch.main.merge', 'refs/heads/release/different-name')
+    const ref = 'refs/remotes/origin/release/different-name'
+    const name = 'origin/release/different-name'
+    await check({ state: 'missing', name })
+    git('update-ref', ref, base)
+    await check({ state: 'tracked', name, ahead: 0, behind: 0 })
+    git('commit', '--allow-empty', '-m', 'local ahead')
+    const local = git('rev-parse', 'HEAD')
+    await check({ state: 'tracked', name, ahead: 1, behind: 0 })
+    const tree = git('rev-parse', 'HEAD^{tree}')
+    const remote = git('commit-tree', tree, '-p', local, '-m', 'remote ahead')
+    git('update-ref', ref, remote)
+    await check({ state: 'tracked', name, ahead: 0, behind: 1 })
+    git('commit', '--allow-empty', '-m', 'local divergence')
+    await check({ state: 'tracked', name, ahead: 1, behind: 1 })
+    assert.equal(git('rev-parse', ref), remote)
+    git('update-ref', '-d', ref)
+    await check({ state: 'missing', name })
+    git('switch', '--detach')
+    await check({ state: 'detached' })
+  } finally {
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+const panelData = html => JSON.parse(html.match(/<script type="application\/json" id="git-graph-data">([\s\S]*?)<\/script>/)[1])
+
+test('Git real: repo vacío, cambios del primer commit y transición al historial', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-unborn-'))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  try {
+    git('init', '-b', 'first/branch')
+    git('config', 'user.name', 'Ana')
+    git('config', 'user.email', 'ana@example.com')
+    const emptyHtml = await buildPanel(repo)
+    const empty = panelData(emptyHtml)
+    assert.equal(empty.error, '')
+    assert.equal(empty.unborn, true)
+    assert.equal(empty.head, '')
+    assert.equal(empty.branch, 'first/branch')
+    assert.deepEqual(empty.rows, [])
+    assert.match(emptyHtml, /No hay archivos pendientes del primer commit/)
+    assert.ok(!emptyHtml.split('<script')[0].includes('Esperando a saber'))
+
+    await writeFile(join(repo, 'staged.txt'), 'first commit\n')
+    let data = panelData(await buildPanel(repo))
+    assert.deepEqual(data.rows[0].commit.changes, [{ x: '?', y: '?', path: 'staged.txt' }])
+    git('add', '--', 'staged.txt')
+    data = panelData(await buildPanel(repo))
+    assert.equal(data.unborn, true)
+    assert.deepEqual(data.rows[0].commit.changes, [{ x: 'A', y: ' ', path: 'staged.txt' }])
+    assert.deepEqual(data.rows[0].commit.parents, [])
+    await writeFile(join(repo, 'pending.txt'), 'untracked\n')
+    const pendingHtml = await buildPanel(repo)
+    data = panelData(pendingHtml)
+    assert.equal(data.error, '')
+    assert.equal(data.unborn, true)
+    assert.equal(data.rows.length, 1)
+    assert.deepEqual(data.rows[0].commit.changes, [
+      { x: 'A', y: ' ', path: 'staged.txt' }, { x: '?', y: '?', path: 'pending.txt' },
+    ])
+    assert.deepEqual(data.rows[0].commit.parents, [])
+    assert.deepEqual(data.rows[0].after, [null])
+    assert.equal(data.rows[0].hasIncoming, false)
+    assert.deepEqual(data.refsByCommit.WORKING_TREE.heads, [])
+    assert.ok(!pendingHtml.match(/<svg class="graph"[^>]*>([\s\S]*?)<\/svg>/)[1].includes('<path'))
+
+    git('-c', 'commit.gpgsign=false', 'commit', '-m', 'First commit')
+    data = panelData(await buildPanel(repo))
+    assert.equal(data.error, '')
+    assert.equal(data.unborn, false)
+    assert.equal(data.head, git('rev-parse', 'HEAD'))
+    assert.deepEqual(data.rows[0].commit.parents, [data.head])
+    assert.equal(data.rows[1].hasIncoming, true)
+    assert.equal(data.rows[1].commit.subject, 'First commit')
+    assert.deepEqual(data.rows[1].commit.parents, [])
+    await rm(join(repo, 'pending.txt'))
+    data = panelData(await buildPanel(repo))
+    assert.equal(data.unborn, false)
+    assert.equal(data.rows.length, 1)
+    assert.equal(data.rows[0].commit.hash, data.head)
+
+    // An orphan branch has no HEAD even when other branches have history.
+    git('checkout', '--orphan', 'next/branch')
+    data = panelData(await buildPanel(repo))
+    assert.equal(data.error, '')
+    assert.equal(data.unborn, true)
+    assert.equal(data.branch, 'next/branch')
+    assert.deepEqual(data.rows[0].commit.parents, [])
+    assert.equal(data.rows[1].hasIncoming, false)
+  } finally { await rm(repo, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('Git real: no confunde rutas no Git ni refs o índices corruptos con una rama sin commits', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-unborn-errors-'))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  const assertError = async () => {
+    const html = await buildPanel(repo)
+    const data = panelData(html)
+    assert.ok(data.error)
+    assert.equal(data.unborn, false)
+    assert.deepEqual(data.rows, [])
+    assert.ok(!html.split('<script')[0].includes('todavía no tiene commits'))
+  }
+  try {
+    await assertError()
+    git('init', '-b', 'main')
+    await writeFile(join(repo, '.git', 'index'), 'broken index')
+    await assertError()
+    await rm(join(repo, '.git', 'index'))
+    await writeFile(join(repo, '.git', 'refs', 'heads', 'main'), `${'1'.repeat(40)}\n`)
+    await assertError()
+    await rm(join(repo, '.git', 'refs', 'heads', 'main'))
+    await writeFile(join(repo, '.git', 'HEAD'), `${'1'.repeat(40)}\n`)
+    await assertError()
+  } finally { await rm(repo, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
+test('Git real: los errores de operaciones que requieren worktree no se ocultan', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-unborn-bare-'))
+  try {
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: repo, windowsHide: true })
+    const data = panelData(await buildPanel(repo))
+    assert.match(data.error, /work tree/)
+    assert.equal(data.unborn, false)
+    assert.deepEqual(data.rows, [])
+  } finally { await rm(repo, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
+})
+
 test('el worker carga el renderizador nuevo sin reiniciar y reutiliza revisiones idénticas', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'git-graph-reload-'))
   try {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
-import type { Change, PanelData, PanelRefs, PanelRow } from './types.js'
+import type { Change, PanelData, PanelRefs, PanelRow, UpstreamStatus } from './types.js'
 import { ROW, LANE, PAD, GREY, color } from './graph-style.js'
 import { branchesOf, emptyFilters, findMatches } from './explore.js'
 import { Details } from './details.js'
@@ -8,6 +8,9 @@ import { StashMenu } from './stash-menu.js'
 import { RepositoryActionDialog } from './repository-action-dialog.js'
 import { defaultViewOptions, visibleHistory } from './view-options.js'
 import { ViewOptionsMenu } from './view-options-menu.js'
+import { parsePanelState, type PanelState } from './panel-state.js'
+import { PanelStateDialog } from './panel-state-dialog.js'
+import type { ChangesView } from './changes.js'
 
 const x = (lane: number) => PAD + lane * LANE
 const curve = (x1: number, y1: number, x2: number, y2: number) => {
@@ -143,7 +146,24 @@ export function Panel(data: PanelData) {
   return <LoadedPanel {...data} />
 }
 
-function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows: allRows, refsByCommit: allRefs, now, error }: PanelData) {
+function Upstream({ status }: { status: UpstreamStatus }) {
+  const message = status.state === 'none' ? 'Sin upstream'
+    : status.state === 'detached' ? 'HEAD separado: sin rama actual'
+    : status.state === 'unborn' ? 'Sin commits'
+    : status.state === 'missing' ? 'Upstream no disponible en refs locales'
+    : status.state === 'unavailable' ? 'Comparación no disponible'
+    : ''
+  return <section className="upstream-status" aria-label="Relación con upstream">
+    {'name' in status ? <span className="upstream-name"><span className="label">Upstream:</span> <b>{status.name}</b></span> : null}
+    {status.state === 'tracked' ? <span className="upstream-counts">
+      <span role="img" aria-label={`${status.ahead} commits por delante (ahead)`}><span aria-hidden="true">↑</span> {status.ahead} ahead</span>
+      <span role="img" aria-label={`${status.behind} commits por detrás (behind)`}><span aria-hidden="true">↓</span> {status.behind} behind</span>
+    </span> : <span>{message}</span>}
+    <span className="upstream-note">Estado de refs locales; fetch actualiza las remotas.</span>
+  </section>
+}
+
+function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, upstream, rows: allRows, refsByCommit: allRefs, now, error, unborn = false }: PanelData) {
   const [viewOptions, setViewOptions] = useState(defaultViewOptions)
   const { rows, refsByCommit } = useMemo(() => visibleHistory(allRows, allRefs, head, viewOptions), [allRows, allRefs, head, viewOptions])
   const [repositoryAction, setRepositoryAction] = useState<'refresh' | 'fetch' | null>(null)
@@ -156,6 +176,11 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
   const [showFilters, setShowFilters] = useState(false)
   const [selectedHash, setSelectedHash] = useState<string | null>(null)
   const [detailsHeight, setDetailsHeight] = useState(40)
+  const [changesView, setChangesView] = useState<ChangesView>('tree')
+  const [stateSnapshot, setStateSnapshot] = useState<string | null>(null)
+  const stateButton = useRef<HTMLButtonElement>(null)
+  const lastFocus = useRef<PanelState['focus']>({ kind: 'none', value: '' })
+  const pendingRestore = useRef<PanelState | null>(null)
   const workspace = useRef<HTMLDivElement>(null)
   const resizeStart = useRef<{ y: number; height: number; available: number } | null>(null)
   const [focusHash, setFocusHash] = useState(rows.some(row => row.commit.hash === head) ? head : rows[0]?.commit.hash || '')
@@ -170,6 +195,45 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
   const filterCount = Number(Boolean(filters.branch)) + Number(Boolean(filters.author)) + Number(filters.mergesOnly)
   const filtered = Boolean(filters.query.trim() || filterCount)
   const resizeDetails = (height: number) => setDetailsHeight(Math.min(75, Math.max(20, height)))
+
+  useEffect(() => {
+    const rememberFocus = (event: FocusEvent) => {
+      const element = event.target
+      if (!(element instanceof HTMLElement) || element === stateButton.current || element.closest('dialog')) return
+      const row = element.closest<HTMLTableRowElement>('tr[data-hash]')
+      if (row?.dataset.hash) lastFocus.current = { kind: 'row', value: row.dataset.hash }
+      else lastFocus.current = { kind: 'control', value: element.getAttribute('aria-label') || '' }
+    }
+    document.addEventListener('focusin', rememberFocus)
+    return () => document.removeEventListener('focusin', rememberFocus)
+  }, [])
+
+  const captureState = () => {
+    const snapshot: PanelState = {
+      version: 1, repoPath, filters, viewOptions, showSearch, showFilters,
+      selectedHash, focusHash, focus: lastFocus.current, detailsHeight, changesView,
+      scroll: {
+        graph: workspace.current?.querySelector('.graph-list')?.scrollTop || 0,
+        details: workspace.current?.querySelector('.details')?.scrollTop || 0,
+      },
+    }
+    setStateSnapshot(JSON.stringify(snapshot))
+  }
+
+  const restoreState = (text: string) => {
+    const state = parsePanelState(text, { repo, repoPath, branch, head, rows: allRows, refsByCommit: allRefs, now, error })
+    pendingRestore.current = state
+    setViewOptions(state.viewOptions)
+    setFilters(state.filters)
+    setShowSearch(state.showSearch)
+    setShowFilters(state.showFilters)
+    setSelectedHash(state.selectedHash)
+    setFocusHash(state.focusHash)
+    setDetailsHeight(state.detailsHeight)
+    setChangesView(state.changesView)
+    setStateSnapshot(null)
+    setNotice('Instantánea restaurada. Los commits o filtros que ya no existen se han descartado.')
+  }
 
   useEffect(() => { if (showSearch) searchInput.current?.focus() }, [showSearch])
 
@@ -198,7 +262,7 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
   }
   useEffect(() => {
     const shortcuts = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !stateSnapshot) {
         setSelectedHash(null)
         if (selectedHash) rowElements.current.get(selectedHash)?.focus({ preventScroll: true })
       }
@@ -211,13 +275,31 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
     }
     document.addEventListener('keydown', shortcuts)
     return () => document.removeEventListener('keydown', shortcuts)
-  }, [selectedHash])
+  }, [selectedHash, stateSnapshot])
+
+  // Run after search autofocus and selection scrolling, using the final DOM.
+  // No snapshot is read before hydration: the initial client render matches SSR.
+  useEffect(() => {
+    const state = pendingRestore.current
+    if (!state) return
+    pendingRestore.current = null
+    const fallback = rowElements.current.get(state.focusHash) || stateButton.current
+    const target = state.focus.kind === 'row' ? rowElements.current.get(state.focus.value)
+      : state.focus.kind === 'control' ? [...document.querySelectorAll<HTMLElement>('button[aria-label], input[aria-label], select[aria-label], [role="separator"][aria-label]')].find(element => element.getAttribute('aria-label') === state.focus.value) : null
+    if (state.focus.kind !== 'none') (target || fallback)?.focus({ preventScroll: true })
+    else stateButton.current?.focus({ preventScroll: true })
+    const graph = workspace.current?.querySelector('.graph-list')
+    const details = workspace.current?.querySelector('.details')
+    if (graph) graph.scrollTop = state.scroll.graph
+    if (details) details.scrollTop = state.scroll.details
+  })
   return <>
     <header>
       <span><span className="label">Repo:</span> <b>{repo || '—'}</b></span>
       <span><span className="label">Rama:</span> <b>{branch || '—'}</b></span>
       {now ? <span className="sub">actualizado <span className="clock">{now}</span></span> : null}
       <div className="header-actions">
+        <button ref={stateButton} type="button" className="icon-button" aria-label="Estado del panel" title="Copiar o restaurar el estado del panel" disabled={!repoPath} onClick={captureState}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l4 4v14H3V3Zm2 0v6h10V3M7 21v-8h10v8" /></svg></button>
         <button type="button" className="icon-button" aria-label="Fetch from remote" title="Fetch from remote" disabled={!repoPath || !actionModule} onClick={event => { actionButton.current = event.currentTarget; setRepositoryAction('fetch') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17H5a4 4 0 0 1-.5-8A6 6 0 0 1 16 7a5 5 0 0 1 3 10h-2M12 11v10m-4-4 4 4 4-4" /></svg></button>
         <button type="button" className="icon-button" aria-label="Refrescar grafo" title="Refrescar grafo" disabled={!repoPath || !actionModule} onClick={event => { actionButton.current = event.currentTarget; setRepositoryAction('refresh') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8a8 8 0 1 1-5-4M15 1v4h4" /></svg></button>
         {allRows.length ? <>
@@ -235,9 +317,11 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
         </> : null}
       </div>
     </header>
+    {!error && upstream ? <Upstream status={upstream} /> : null}
     {error ? <div className="error">{error}</div> : null}
     {notice ? <p className="stash-notice" role="status">{notice}</p> : null}
-    {!error && !allRows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
+    {!error && unborn ? <div className="hint" role="status">La rama {branch} todavía no tiene commits. {allRows.some(row => row.commit.wip) ? 'Archivos pendientes del primer commit.' : 'No hay archivos pendientes del primer commit.'}</div> : null}
+    {!error && !unborn && !allRows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
     {allRows.length ? <>
       <div className="branch-toolbar"><BranchSelector branches={branches} value={filters.branch} onChange={branch => setFilters({ ...filters, branch })} /></div>
       {filtered ? <fieldset className="toolbar" aria-label="Explorar historial"><button type="button" onClick={() => setFilters(emptyFilters)}>Limpiar</button></fieldset> : null}
@@ -260,7 +344,8 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
       }} onRowRef={element => { if (element) rowElements.current.set(row.commit.hash, element); else rowElements.current.delete(row.commit.hash) }} />)}</tbody>
       </table></div>
       {selected ? <>
-        <hr className="details-resizer" tabIndex={0} aria-label="Ajustar altura de los detalles" aria-orientation="horizontal" aria-controls="commit-details" aria-valuemin={20} aria-valuemax={75} aria-valuenow={Math.round(detailsHeight)} aria-valuetext={`${Math.round(detailsHeight)}% del panel`} onPointerDown={event => {
+        {/* biome-ignore lint/a11y/useSemanticElements: An interactive window splitter, not a thematic break. */}
+        <div className="details-resizer" role="separator" tabIndex={0} aria-label="Ajustar altura de los detalles" aria-orientation="horizontal" aria-controls="commit-details" aria-valuemin={20} aria-valuemax={75} aria-valuenow={Math.round(detailsHeight)} aria-valuetext={`${Math.round(detailsHeight)}% del panel`} onPointerDown={event => {
           if (event.button !== 0 || !workspace.current) return
           event.preventDefault()
           event.currentTarget.focus()
@@ -277,12 +362,13 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
           event.preventDefault()
           resizeDetails(event.key === 'Home' ? 20 : event.key === 'End' ? 75 : detailsHeight + (event.key === 'ArrowUp' ? 5 : -5))
         }} />
-        <Details key={selected.commit.hash} row={selected} loadedHashes={loadedHashes} onClose={() => { setSelectedHash(null); rowElements.current.get(selected.commit.hash)?.focus({ preventScroll: true }) }} onJump={selectHash} />
+        <Details key={selected.commit.hash} row={selected} loadedHashes={loadedHashes} changesView={changesView} onChangesView={setChangesView} onClose={() => { setSelectedHash(null); rowElements.current.get(selected.commit.hash)?.focus({ preventScroll: true }) }} onJump={selectHash} />
       </> : null}
       </div>
     </> : null}
     {stashMenu ? <StashMenu key={stashMenu.hash} {...stashMenu} repo={repoPath} onNotice={setNotice} onClose={() => { setStashMenu(null); rowElements.current.get(stashMenu.hash)?.focus({ preventScroll: true }) }} /> : null}
     {repositoryAction ? <RepositoryActionDialog action={repositoryAction} repo={repoPath} module={actionModule} onNotice={setNotice} onClose={() => { setRepositoryAction(null); actionButton.current?.focus() }} /> : null}
+    {stateSnapshot !== null ? <PanelStateDialog snapshot={stateSnapshot} onRestore={restoreState} onClose={() => { setStateSnapshot(null); stateButton.current?.focus({ preventScroll: true }) }} /> : null}
   </>
 }
 
