@@ -5,6 +5,7 @@ export interface Change {
 }
 
 interface CommitBase {
+  stash?: string
   hash: string
   parents: string[]
   refs: string[]
@@ -59,12 +60,14 @@ export interface PanelRefs {
 
 export interface PanelData {
   repo: string
+  repoPath?: string
   branch: string
   head: string
   rows: PanelRow[]
   refsByCommit: Record<string, PanelRefs>
   now: string
   error: string
+  loading?: boolean
 }
 
 export interface RenderOptions {
@@ -75,4 +78,5 @@ export interface RenderOptions {
   remotes?: string[]
   now?: Date | null
   error?: string
+  loading?: boolean
 }

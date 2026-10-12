@@ -57,6 +57,27 @@ export function parseLog(stdout: string): GitCommit[] {
     })
 }
 
+// El reflog enumera todos los stashes, no solo la punta de refs/stash.
+// Sus otros padres son snapshots internos del índice y de ficheros sin seguimiento.
+export function parseStashes(stdout: string): GitCommit[] {
+  return stdout.split('\x1e').map(record => record.trimStart()).filter(Boolean).map(record => {
+    const separator = record.indexOf('\x1f')
+    const [commit] = parseLog(record.slice(separator + 1))
+    return { ...commit, refs: [], parents: commit.parents.slice(0, 1), stash: record.slice(0, separator) }
+  })
+}
+
+export function withStashes(commits: GitCommit[], stashes: GitCommit[]): GitCommit[] {
+  const stashHashes = new Set(stashes.map(stash => stash.hash))
+  const result = commits.filter(commit => !stashHashes.has(commit.hash))
+  for (const stash of [...stashes].reverse()) {
+    const index = result.findIndex(commit => commit.hash === stash.parents[0]
+      || (commit.date && stash.date && commit.date <= stash.date))
+    result.splice(index < 0 ? result.length : index, 0, stash)
+  }
+  return result
+}
+
 // Salida de `git status --porcelain=v1 -z`: "XY ruta\0". En renombrados y
 // copias la ruta original llega como entrada aparte y se descarta.
 export function parseStatus(stdout: string): Change[] {
@@ -154,7 +175,7 @@ export function groupRefs(refs: string[], remotes: string[] = []): GroupedRefs {
   return { heads, remotes: loose, tags }
 }
 
-export function renderHtml({ repo, branch, head, rows, remotes = [], now = null, error }: RenderOptions): string {
+export function renderHtml({ repo, branch, head, rows, remotes = [], now = null, error, loading = false }: RenderOptions): string {
   const refsByCommit = Object.fromEntries(rows.map(row => {
     const laneColor = PALETTE[row.col % PALETTE.length]
     const refs = groupRefs(row.commit.refs, remotes)
@@ -166,6 +187,7 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
   }))
   const payload: PanelData = {
     repo: repo ? basename(resolve(repo)) : '',
+    repoPath: repo ? resolve(repo) : '',
     branch: branch || '',
     head,
     rows: rows.map(row => {
@@ -175,6 +197,7 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
     refsByCommit,
     now: now ? now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '',
     error: error || '',
+    loading,
   }
   const app = renderToString(React.createElement(Panel, payload))
   const serialized = JSON.stringify(payload)
@@ -201,8 +224,8 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
 export async function buildPanel(repo: string): Promise<string> {
   const now = new Date()
   try {
-    const [log, head, branch, status, remotes] = await Promise.all([
-      git(repo, ['log', '--branches', '--remotes', '--tags', 'HEAD', '--date-order', `-n${LIMIT}`, `--format=${LOG_FORMAT}`]),
+    const [stashLog, head, branch, status, remotes] = await Promise.all([
+      git(repo, ['stash', 'list', `--format=%gd%x1f${LOG_FORMAT}`]),
       git(repo, ['rev-parse', 'HEAD']),
       git(repo, ['branch', '--show-current']),
       // sin --no-optional-locks, status refresca el índice y puede chocar
@@ -210,7 +233,10 @@ export async function buildPanel(repo: string): Promise<string> {
       git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z']).catch(() => ''),
       git(repo, ['remote']).catch(() => ''),
     ])
-    const commits: Commit[] = parseLog(log)
+    const stashes = parseStashes(stashLog)
+    const bases = [...new Set(stashes.flatMap(stash => stash.parents))]
+    const log = await git(repo, ['log', '--branches', '--remotes', '--tags', 'HEAD', ...bases, '--date-order', `-n${LIMIT}`, `--format=${LOG_FORMAT}`])
+    const commits: Commit[] = withStashes(parseLog(log), stashes)
     const changes = parseStatus(status)
     if (changes.length) commits.unshift(wipCommit(changes, head.trim()))
     return renderHtml({
@@ -250,5 +276,10 @@ export async function writePanel(repo: string, isCurrent: () => Promise<boolean>
 export async function resetPanel(): Promise<void> {
   await hideGeneratedPanelFromGit()
   await writeFile(PANEL_PATH, renderHtml({ repo: '', branch: '', head: '', rows: [] }))
+}
+
+export async function writeLoadingPanel(repo = ''): Promise<void> {
+  await hideGeneratedPanelFromGit()
+  await writeFile(PANEL_PATH, renderHtml({ repo, branch: '', head: '', rows: [], loading: true }))
 }
 

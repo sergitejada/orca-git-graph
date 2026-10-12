@@ -5,6 +5,8 @@ Plugin de [Orca](https://github.com/stablyai/orca) que añade a la sidebar derec
 - Tabla con columnas Grafo, Descripción, Fecha, Autor y Commit. En una sidebar estrecha se ocultan Autor, Fecha y Commit, en ese orden.
 - Carriles con la paleta de Git Graph y curvas donde una rama sale o se fusiona.
 - Fila **Cambios sin confirmar (N)** arriba, unida a HEAD con una línea gris.
+- Stashes existentes con etiqueta `stash@{n}`, icono y mensaje, unidos a su commit base sin mostrar los snapshots internos del índice. Se pueden buscar, filtrar y seleccionar para ver sus detalles.
+- Al hacer clic derecho sobre la etiqueta del stash: menú para aplicar, crear rama, aplicar y eliminar (pop), eliminar (drop), copiar nombre o copiar hash. El clic izquierdo en la fila abre sus detalles. Las acciones de Git se ejecutan en una terminal de shell elegida por el usuario, con Node y Git en el PATH; el resultado se muestra en esa terminal. Orca requiere los permisos `workspace:read` y `terminal:send`.
 - Etiquetas de rama y tag con icono; la remota del mismo nombre va dentro de la etiqueta local (`main | origin`).
 - Al pasar el ratón: hash completo, autor, fecha y mensaje; en los cambios sin confirmar, los ficheros.
 - Botón **Pantalla completa** en la cabecera para ampliar el grafo; `Esc` permite salir.

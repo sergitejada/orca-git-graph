@@ -4,6 +4,7 @@ import { ROW, LANE, PAD, GREY, color } from './graph-style.js'
 import { branchesOf, emptyFilters, findMatches } from './explore.js'
 import { Details } from './details.js'
 import { BranchSelector } from './branch-selector.js'
+import { StashMenu } from './stash-menu.js'
 
 const x = (lane: number) => PAD + lane * LANE
 const curve = (x1: number, y1: number, x2: number, y2: number) => {
@@ -42,7 +43,7 @@ function Graph({ rows, head, matches }: { rows: PanelRow[]; head: string; matche
       }
     }
 
-    const hollow = row.commit.wip || (row.commit.hash === head && wipLane < 0)
+    const hollow = row.commit.wip || Boolean(row.commit.stash) || (row.commit.hash === head && wipLane < 0)
     const dotColor = row.commit.wip ? GREY : color(row.col)
     dots.push(<circle key={`d${index}`} cx={cx} cy={middle} r="4" opacity={matches.has(row.commit.hash) ? 1 : 0.3} fill={hollow ? 'var(--panel-background)' : dotColor} stroke={hollow ? dotColor : undefined} strokeWidth={hollow ? 1.5 : undefined} />)
   })
@@ -56,6 +57,10 @@ function BranchIcon() {
 
 function TagIcon() {
   return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 2.5v5.2l6.8 6.8 6.2-6.2-6.8-6.8H2.5a1 1 0 0 0-1 1Zm3 .8a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4Z" /></svg>
+}
+
+function StashIcon() {
+  return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h12l2 9v3H0v-3L2 2Zm1.2 1.5L1.7 10H5l1 2h4l1-2h3.3l-1.5-6.5H3.2Z" /></svg>
 }
 
 function Refs({ refs }: { refs: PanelRefs }) {
@@ -73,10 +78,11 @@ interface CommitRowProps {
   selected: boolean
   focusable: boolean
   onSelect(hash: string): void
+  onStashContextMenu(hash: string, name: string, left: number, top: number): void
   onRowRef(element: HTMLTableRowElement | null): void
 }
 
-function CommitRow({ row, head, refs, graphRows, matches, selected, focusable, onSelect, onRowRef }: CommitRowProps) {
+function CommitRow({ row, head, refs, graphRows, matches, selected, focusable, onSelect, onStashContextMenu, onRowRef }: CommitRowProps) {
   const { commit } = row
   const title = commit.wip
     ? (() => {
@@ -93,7 +99,7 @@ function CommitRow({ row, head, refs, graphRows, matches, selected, focusable, o
       if (commit.changes.length > 15) files.push(`… y ${commit.changes.length - 15} más`)
       return `${commit.subject}\n${summary.join(' · ')}\n\n${files.join('\n')}`
     })()
-    : `${commit.hash} · ${commit.author} · ${commit.dateLabel}\n\n${commit.subject}${commit.refs.length ? `\n\n${commit.refs.join(', ')}` : ''}`
+    : `${commit.stash ? `${commit.stash}\n` : ''}${commit.hash} · ${commit.author} · ${commit.dateLabel}\n\n${commit.subject}${commit.refs.length ? `\n\n${commit.refs.join(', ')}` : ''}`
 
   return <tr ref={onRowRef} data-hash={commit.hash} tabIndex={focusable ? 0 : -1} aria-selected={selected} aria-label={`${commit.wip ? 'Cambios sin confirmar' : commit.subject} · ${commit.hash}`} className={[commit.wip ? 'wip' : '', matches.has(commit.hash) ? '' : 'dimmed', selected ? 'selected' : ''].filter(Boolean).join(' ') || undefined} title={title} onClick={() => onSelect(commit.hash)} onKeyDown={event => {
     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(commit.hash) }
@@ -102,6 +108,11 @@ function CommitRow({ row, head, refs, graphRows, matches, selected, focusable, o
     <td className="desc">{commit.wip ? <b>{`${commit.subject} (${commit.changes.length})`}</b> : <>
       {commit.hash === head && <span className="head-dot" style={{ borderColor: color(row.col) }} title="HEAD" />}
       <Refs refs={refs} />
+      {commit.stash ? <span className="ref stash" onContextMenu={event => {
+        event.preventDefault()
+        event.stopPropagation()
+        onStashContextMenu(commit.hash, commit.stash!, event.clientX, event.clientY)
+      }}><span className="ico" style={{ background: color(row.col) }}><StashIcon /></span><span className="name">{commit.stash}</span></span> : null}
       <span className="subject">{commit.subject}</span>
     </>}</td>
     <td className="date">{commit.wip ? <span className="clock">{commit.dateLabel}</span> : commit.dateLabel}</td>
@@ -110,7 +121,20 @@ function CommitRow({ row, head, refs, graphRows, matches, selected, focusable, o
   </tr>
 }
 
-export function Panel({ repo, branch, head, rows, refsByCommit, now, error }: PanelData) {
+export function Panel(data: PanelData) {
+  if (data.loading) return <main className="loading-view" aria-busy="true">
+    <div className="loading-status" role="status">
+      <span className="loading-spinner" aria-hidden="true" />
+      <h1>Cargando Git Graph…</h1>
+      <p>{data.repo ? `Leyendo commits, ramas y cambios de ${data.repo}.` : 'Preparando el repositorio y su historial.'}</p>
+    </div>
+  </main>
+  return <LoadedPanel {...data} />
+}
+
+function LoadedPanel({ repo, repoPath = '', branch, head, rows, refsByCommit, now, error }: PanelData) {
+  const [stashMenu, setStashMenu] = useState<{ hash: string; name: string; left: number; top: number } | null>(null)
+  const [notice, setNotice] = useState('')
   const [filters, setFilters] = useState(emptyFilters)
   const [showFilters, setShowFilters] = useState(false)
   const [selectedHash, setSelectedHash] = useState<string | null>(null)
@@ -157,14 +181,16 @@ export function Panel({ repo, branch, head, rows, refsByCommit, now, error }: Pa
     document.addEventListener('keydown', shortcuts)
     return () => document.removeEventListener('keydown', shortcuts)
   }, [])
-  const commits = rows.filter(row => !row.commit.wip).length
+  const commits = rows.filter(row => !row.commit.wip && !row.commit.stash).length
+  const stashes = rows.filter(row => row.commit.stash).length
   return <>
     <header>
       <span><span className="label">Repo:</span> <b>{repo || '—'}</b></span>
       <span><span className="label">Rama:</span> <b>{branch || '—'}</b></span>
-      <span className="sub">{`${commits} ${commits === 1 ? 'commit' : 'commits'}`}{now ? <> · actualizado <span className="clock">{now}</span></> : null}</span>
+      <span className="sub">{`${commits} ${commits === 1 ? 'commit' : 'commits'}`}{stashes ? ` · ${stashes} ${stashes === 1 ? 'stash' : 'stashes'}` : ''}{now ? <> · actualizado <span className="clock">{now}</span></> : null}</span>
     </header>
     {error ? <div className="error">{error}</div> : null}
+    {notice ? <p className="stash-notice" role="status">{notice}</p> : null}
     {!error && !rows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
     {rows.length ? <>
       <div className="branch-toolbar"><BranchSelector branches={branches} value={filters.branch} onChange={branch => setFilters({ ...filters, branch })} /></div>
@@ -183,11 +209,19 @@ export function Panel({ repo, branch, head, rows, refsByCommit, now, error }: Pa
       <div className={`workspace${selected ? ' details-open' : ''}`}>
       <div className="graph-list"><table onKeyDown={tableKeyDown} aria-label="Historial de commits">
       <thead><tr><th className="graph" style={{ minWidth: 12 + Math.max(28, 2 * PAD + (Math.max(1, ...rows.map(row => Math.max(row.before.length, row.after.length))) - 1) * LANE) }}>Grafo</th><th className="desc">Descripción</th><th className="date">Fecha</th><th className="author">Autor</th><th className="hash">Commit</th></tr></thead>
-      <tbody>{rows.map((row, index) => <CommitRow key={row.commit.hash || index} row={row} head={head} refs={refsByCommit[row.commit.hash] || { heads: [], remotes: [], tags: [] }} graphRows={index === 0 ? rows : null} matches={matches} selected={selectedHash === row.commit.hash} focusable={focusHash === row.commit.hash} onSelect={selectHash} onRowRef={element => { if (element) rowElements.current.set(row.commit.hash, element); else rowElements.current.delete(row.commit.hash) }} />)}</tbody>
+      <tbody>{rows.map((row, index) => <CommitRow key={row.commit.hash || index} row={row} head={head} refs={refsByCommit[row.commit.hash] || { heads: [], remotes: [], tags: [] }} graphRows={index === 0 ? rows : null} matches={matches} selected={selectedHash === row.commit.hash} focusable={focusHash === row.commit.hash} onSelect={hash => {
+        selectHash(hash)
+        setNotice('')
+        setStashMenu(null)
+      }} onStashContextMenu={(hash, name, left, top) => {
+        setNotice('')
+        setStashMenu({ hash, name, left, top })
+      }} onRowRef={element => { if (element) rowElements.current.set(row.commit.hash, element); else rowElements.current.delete(row.commit.hash) }} />)}</tbody>
       </table></div>
       {selected ? <Details key={selected.commit.hash} row={selected} loadedHashes={loadedHashes} onClose={() => { setSelectedHash(null); rowElements.current.get(selected.commit.hash)?.focus({ preventScroll: true }) }} onJump={selectHash} /> : null}
       </div>
     </> : null}
+    {stashMenu ? <StashMenu key={stashMenu.hash} {...stashMenu} repo={repoPath} onNotice={setNotice} onClose={() => { setStashMenu(null); rowElements.current.get(stashMenu.hash)?.focus({ preventScroll: true }) }} /> : null}
   </>
 }
 

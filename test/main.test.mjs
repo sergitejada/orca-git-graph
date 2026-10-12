@@ -11,12 +11,15 @@ function worker() {
   const events = new Map()
   const published = []
   const errors = []
+  const loading = []
+  const operations = []
   activate({
     log: message => errors.push(message),
     commands: { register: (_id, handler) => { command = handler } },
     events: { on: (event, handler) => events.set(event, handler) },
   }, {
-    readActiveRepo: async () => selected,
+    readActiveRepo: async () => { operations.push('read'); return selected },
+    writeLoadingPanel: async repo => { loading.push(repo ?? ''); operations.push('loading') },
     writePanel: async (repo, isCurrent) => {
       await beforePublish(repo)
       if (!await isCurrent()) return false
@@ -28,7 +31,7 @@ function worker() {
     setInterval: (handler, ms) => { assert.equal(ms, 1000); tick = handler },
   })
   return {
-    published, errors, events,
+    published, errors, events, loading, operations,
     command: () => command(),
     ready: () => new Promise(resolve => setImmediate(resolve)),
     tick: async () => { tick(); await new Promise(resolve => setImmediate(resolve)) },
@@ -46,6 +49,41 @@ test('al arrancar y cambiar de proyecto sigue la selección sin actividad de age
   await w.tick()
   assert.deepEqual(w.published, ['/projects/a', '/projects/b'])
   assert.deepEqual(await w.command(), { repo: '/projects/b' })
+})
+
+test('muestra la carga antes de leer el foco y mientras Git sigue pendiente', async () => {
+  const w = worker()
+  let finish
+  const gate = new Promise(resolve => { finish = resolve })
+  w.beforePublish(() => gate)
+  await w.ready()
+  assert.deepEqual(w.operations.slice(0, 2), ['loading', 'read'])
+  assert.deepEqual(w.loading, [''])
+  assert.deepEqual(w.published, [])
+  finish()
+  await w.ready()
+  assert.deepEqual(w.published, ['/projects/a'])
+  w.advance(4000)
+  await w.tick()
+  assert.deepEqual(w.loading, [''], 'los refrescos del mismo repo no muestran carga')
+  w.select('/projects/b')
+  await w.tick()
+  assert.deepEqual(w.loading, ['', '/projects/b'])
+  w.select(null)
+  await w.tick()
+  assert.equal(w.published.at(-1), null)
+  assert.deepEqual(w.loading, ['', '/projects/b'])
+})
+
+test('un fallo inesperado durante la carga limpia el indicador y permite reintentar', async () => {
+  const w = worker()
+  w.beforePublish(async () => { throw new Error('fallo de lectura') })
+  await w.ready()
+  assert.deepEqual(w.published, [null])
+  assert.ok(w.errors.some(message => message.includes('fallo de lectura')))
+  w.beforePublish(async () => {})
+  await w.tick()
+  assert.equal(w.published.at(-1), '/projects/a')
 })
 
 test('la actividad en segundo plano no selecciona su repositorio', async () => {

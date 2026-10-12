@@ -28,7 +28,7 @@ export function Details({ row, loadedHashes, onClose, onJump }: DetailsProps) {
   }
 
   return <aside className="details" aria-label="Detalles del commit">
-    <div className="details-heading"><h2>{commit.wip ? 'Cambios sin confirmar' : 'Detalles del commit'}</h2><button type="button" onClick={onClose} aria-label="Cerrar detalles" title="Cerrar detalles (Esc)">✕</button></div>
+    <div className="details-heading"><h2>{commit.wip ? 'Cambios sin confirmar' : commit.stash ? `Stash ${commit.stash}` : 'Detalles del commit'}</h2><button type="button" onClick={onClose} aria-label="Cerrar detalles" title="Cerrar detalles (Esc)">✕</button></div>
     <h3>{commit.subject}</h3>
     {commit.wip ? <>
       <p className="detail-muted">{commit.changes.length} ficheros · {commit.changes.filter(change => change.x !== ' ' && change.x !== '?').length} preparados · {commit.changes.filter(change => change.y !== ' ' && change.y !== '?').length} sin preparar · {commit.changes.filter(change => change.x === '?').length} sin seguimiento</p>

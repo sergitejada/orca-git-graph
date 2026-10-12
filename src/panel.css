@@ -15,6 +15,13 @@ header .label { color: var(--muted-foreground, #999); }
 header .sub { margin-left: auto; color: var(--muted-foreground, #999); font-size: 11px; }
 .error { color: #E57373; padding: 10px; white-space: pre-wrap; }
 .hint { color: var(--muted-foreground, #999); padding: 10px; line-height: 1.5; }
+.loading-view { display: grid; place-items: center; min-height: 100vh; padding: 24px; }
+.loading-status { max-width: 320px; text-align: center; }
+.loading-spinner { display: inline-block; width: 28px; height: 28px; border: 2px solid rgba(128,128,128,.25); border-top-color: var(--focus-border, #007fd4); border-radius: 50%; animation: loading-spin .8s linear infinite; }
+.loading-status h1 { margin: 14px 0 6px; font-size: 14px; font-weight: 600; }
+.loading-status p { margin: 0; color: var(--muted-foreground, #999); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading-spinner { animation: none; } }
 table { width: 100%; border-collapse: separate; border-spacing: 0; }
 th {
   position: sticky; top: 0; z-index: 2;
@@ -25,12 +32,10 @@ th {
 }
 th + th { border-left: 1px solid rgba(128,128,128,.35); }
 td { height: 24px; padding: 0 6px; white-space: nowrap; }
-th.graph { padding-left: 22px; }
 td.graph { position: relative; padding: 0 0 0 12px; vertical-align: top; }
 td.graph .graph { position: absolute; top: 0; left: 12px; z-index: 1; pointer-events: none; }
 td.desc { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; padding-left: 4px; }
 td.date, td.author, td.hash { padding: 0 6px; }
-th.hash { padding-right: 22px; }
 td.hash { padding-right: 18px; }
 tbody tr:hover td { background: rgba(128,128,128,.15); }
 .head-dot {
@@ -106,6 +111,19 @@ tbody tr.selected td:not(.graph) { opacity: 1; }
 .changes-list li { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid rgba(128,128,128,.15); }
 .changes-list code { white-space: pre; color: var(--muted-foreground, #999); flex-shrink: 0; }
 .changes-list span { overflow-wrap: anywhere; font-size: 12px; }
+.stash-menu { position: fixed; z-index: 20; min-width: 260px; max-width: calc(100vw - 8px); max-height: calc(100vh - 8px); overflow: auto; padding: 4px 0; border: 1px solid var(--border, #454545); background: var(--popover, #202020); color: var(--popover-foreground, #ccc); box-shadow: 0 5px 18px rgba(0,0,0,.45); }
+.stash-menu button { display: block; width: 100%; border: 0; border-radius: 0; text-align: left; padding: 9px 18px; }
+.stash-menu button:hover, .stash-menu button:focus { background: var(--list-active-selection-background, #007acc); color: #fff; outline: none; }
+.stash-menu .stash-menu-separator { border-top: 1px solid var(--border, #454545); margin-top: 5px; }
+.stash-dialog-overlay { position: fixed; inset: 0; z-index: 21; background: rgba(0,0,0,.45); display: grid; place-items: center; padding: 10px; }
+.stash-dialog { width: 420px; max-width: 100%; max-height: calc(100vh - 20px); overflow: auto; padding: 16px; background: var(--popover, #202020); border: 1px solid var(--border, #454545); border-radius: 5px; }
+.stash-dialog h2 { font-size: 14px; margin: 0 0 12px; }
+.stash-dialog p { line-height: 1.5; }
+.stash-dialog label { display: grid; gap: 5px; margin: 12px 0; }
+.stash-dialog input { font: inherit; color: inherit; padding: 5px 7px; border: 1px solid var(--border, #454545); background: var(--panel-background); }
+.stash-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.stash-repo, .stash-notice { overflow-wrap: anywhere; font-size: 11px; color: var(--muted-foreground, #999); }
+.stash-notice { margin: 0; padding: 8px 10px; }
 @container graph-list (max-width: 560px) { .author { display: none; } }
 @container graph-list (max-width: 440px) { .date { display: none; } }
 @container graph-list (max-width: 300px) { .hash { display: none; } }

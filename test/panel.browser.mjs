@@ -8,6 +8,134 @@ import { layout, renderHtml, wipCommit } from '../render.mjs'
 const csp = "default-src 'none'; connect-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
 const commit = (hash, parents, refs = []) => ({ hash, parents, refs, subject: `commit ${hash}`, author: 'Ana', date: new Date(2026, 0, 1, 10, 0) })
 
+test('los stashes muestran etiqueta, se buscan y abren detalles con navegación a su base', { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  try {
+    const page = await browser.newPage()
+    page.setDefaultTimeout(5000)
+    const errors = []
+    page.on('pageerror', error => errors.push(error.message))
+    const stash = { ...commit('s', ['a']), stash: 'stash@{0}', subject: 'On main: prueba' }
+    const html = renderHtml({ repo: '/repo', branch: 'main', head: 'a', rows: layout([stash, commit('a', [], ['HEAD -> main'])]) })
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="width:900px;height:600px"></iframe>')
+    await page.locator('#panel').evaluate((element, srcdoc) => { element.srcdoc = srcdoc }, html)
+    const frame = page.frameLocator('#panel')
+    await frame.locator('.ref.stash').waitFor()
+    assert.equal(await frame.locator('.ref.stash').innerText(), 'stash@{0}')
+    await frame.locator('.ref.stash').click({ button: 'right' })
+    await frame.getByRole('menu', { name: 'Acciones de stash@{0}' }).waitFor()
+    assert.equal(await frame.locator('tr.selected').count(), 0)
+    assert.equal(await frame.locator('.details').count(), 0)
+    await frame.getByRole('menuitem').first().press('Escape')
+    await frame.locator('tr[data-hash="a"]').click()
+    await frame.locator('.ref.stash').click({ button: 'right' })
+    await frame.getByRole('menu', { name: 'Acciones de stash@{0}' }).waitFor()
+    assert.equal(await frame.locator('tr.selected').getAttribute('data-hash'), 'a')
+    assert.equal(await frame.getByLabel('Hash completo').inputValue(), 'a')
+    await frame.getByRole('menuitem').first().press('Escape')
+    await frame.getByLabel('Buscar commits').fill('stash@{0}')
+    await frame.getByRole('status').getByText('1 coincidencias · contexto visible').waitFor()
+    await frame.locator('tr[data-hash="s"]').click()
+    assert.equal(await frame.getByRole('menu').count(), 0)
+    await frame.locator('.ref.stash').click()
+    assert.equal(await frame.getByRole('menu').count(), 0)
+    await frame.locator('tr[data-hash="s"] .subject').click({ button: 'right' })
+    assert.equal(await frame.getByRole('menu').count(), 0)
+    await frame.locator('tr[data-hash="s"]').press('Enter')
+    assert.equal(await frame.getByRole('menu').count(), 0)
+    await frame.locator('.ref.stash .name').click({ button: 'right' })
+    await frame.getByRole('menu', { name: 'Acciones de stash@{0}' }).waitFor()
+    assert.deepEqual(await frame.getByRole('menuitem').allTextContents(), ['Apply Stash…', 'Create Branch from Stash…', 'Pop Stash…', 'Drop Stash…', 'Copy Stash Name to Clipboard', 'Copy Stash Hash to Clipboard'])
+    await frame.getByRole('menuitem').first().press('Escape')
+    await frame.getByRole('heading', { name: 'Stash stash@{0}', exact: true }).waitFor()
+    await frame.getByRole('button', { name: 'a', exact: true }).click()
+    assert.equal(await frame.locator('tr[data-hash="a"]').getAttribute('aria-selected'), 'true')
+    assert.deepEqual(errors, [])
+  } finally { await browser.close() }
+})
+
+test('el menú pide una terminal explícita y envía el stash elegido por el bridge de Orca', { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  try {
+    const page = await browser.newPage()
+    page.setDefaultTimeout(5000)
+    const hash = 'a'.repeat(40)
+    const stash = { ...commit(hash, ['b']), stash: 'stash@{0}' }
+    const html = renderHtml({ repo: '/repo', branch: 'main', head: 'b', rows: layout([stash, commit('b', [])]) })
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="width:900px;height:600px"></iframe>')
+    await page.evaluate(() => {
+      window.requests = []
+      window.addEventListener('message', event => {
+        if (event.data?.type !== 'orca-panel-action') return
+        window.requests.push(event.data)
+        const value = event.data.action === 'workspace.readContext' ? { terminals: [{ id: 'shell-1' }, { id: 'shell-2' }] } : { accepted: true }
+        event.source.postMessage({ type: 'orca-panel-action-result', requestId: event.data.requestId, ok: true, value }, '*')
+      })
+    })
+    await page.locator('#panel').evaluate((element, srcdoc) => { element.srcdoc = srcdoc }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${html}`)
+    const frame = page.frameLocator('#panel')
+    await frame.locator('.ref.stash .ico').click({ button: 'right' })
+    await frame.getByRole('menuitem', { name: 'Create Branch from Stash…', exact: true }).click()
+    await frame.getByLabel('Nueva rama').fill('feature/stash')
+    await frame.getByLabel('Terminal de shell').selectOption('shell-2')
+    await frame.getByRole('button', { name: 'Ejecutar', exact: true }).click()
+    await frame.getByText(/Comando enviado/).waitFor()
+    const requests = await page.evaluate(() => window.requests)
+    assert.equal(requests.length, 2)
+    assert.equal(requests[1].action, 'terminal.sendText')
+    assert.equal(requests[1].params.terminalId, 'shell-2')
+    assert.equal(requests[1].params.enter, true)
+    const script = Buffer.from(requests[1].params.text.match(/Buffer.from\('([^']+)'/)[1], 'base64').toString('utf8')
+    assert.ok(script.includes(hash))
+    assert.ok(script.includes('feature/stash'))
+    assert.ok(script.includes('"branch"'))
+    assert.equal(await frame.getByRole('dialog').count(), 0)
+    await frame.locator('body').evaluate(body => {
+      body.ownerDocument.execCommand = command => {
+        if (command !== 'copy') return false
+        const input = body.ownerDocument.querySelector('textarea')
+        body.dataset.copied = input.value
+        return true
+      }
+    })
+    for (const [label, value] of [['Copy Stash Name to Clipboard', 'stash@{0}'], ['Copy Stash Hash to Clipboard', hash]]) {
+      await frame.locator('.ref.stash').click({ button: 'right' })
+      await frame.getByRole('menuitem', { name: label, exact: true }).click()
+      await frame.getByText(/(?:Nombre|Hash) del stash copiado/).waitFor()
+      assert.equal(await frame.locator('body').getAttribute('data-copied'), value)
+    }
+  } finally { await browser.close() }
+})
+
+test('la carga inicial se hidrata en el sandbox y da paso al historial o al error', { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    channel: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? undefined : (process.env.PLAYWRIGHT_BROWSER_CHANNEL || 'msedge'), headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 360, height: 480 }, reducedMotion: 'reduce' })
+    const errors = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="border:0;width:100%;height:450px"></iframe>')
+    const show = html => page.locator('#panel').evaluate((element, srcdoc) => { element.srcdoc = srcdoc }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${html}`)
+    const frame = page.frameLocator('#panel')
+    await show(renderHtml({ repo: '/repo', branch: '', head: '', rows: [], loading: true }))
+    await frame.getByRole('status').getByText('Cargando Git Graph…', { exact: true }).waitFor()
+    assert.equal(await frame.locator('main').getAttribute('aria-busy'), 'true')
+    assert.equal(await frame.locator('header, table, .hint').count(), 0)
+    assert.equal(await frame.locator('.loading-spinner').evaluate(element => getComputedStyle(element).animationName), 'none')
+    assert.equal(await frame.locator('body').evaluate(element => element.scrollWidth <= document.documentElement.clientWidth), true)
+    await mkdir('test-artifacts', { recursive: true })
+    await page.screenshot({ path: 'test-artifacts/loading-view.png' })
+    await show(renderHtml({ repo: '/repo', branch: 'main', head: 'a', rows: layout([commit('a', [])]) }))
+    await frame.getByRole('table', { name: 'Historial de commits' }).waitFor()
+    assert.equal(await frame.locator('.loading-view').count(), 0)
+    await show(renderHtml({ repo: '/repo', branch: '', head: '', rows: [], error: 'No se pudo leer el repositorio' }))
+    await frame.getByText('No se pudo leer el repositorio', { exact: true }).waitFor()
+    assert.equal(await frame.locator('.loading-view').count(), 0)
+    assert.deepEqual(errors, [])
+  } finally { await browser.close() }
+})
+
 test('React se hidrata y mantiene estilos en el iframe aislado de Orca', { timeout: 30000 }, async () => {
   const browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,

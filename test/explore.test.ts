@@ -33,3 +33,11 @@ test('los filtros se combinan y permiten cero resultados', () => {
   assert.deepEqual(findMatches(rows, { ...emptyFilters, branch: 'feature', mergesOnly: true }), new Set())
   assert.deepEqual(findMatches(rows, { ...emptyFilters, query: 'inexistente' }), new Set())
 })
+
+test('los stashes se buscan por etiqueta y siguen el filtro de su rama base', () => {
+  const stash = { ...row('s', ['f'], []), commit: { ...row('s', ['f'], []).commit, stash: 'stash@{1}' } }
+  const history = [stash, ...rows]
+  assert.deepEqual(branchesOf(history), branchesOf(rows))
+  assert.deepEqual(findMatches(history, { ...emptyFilters, query: 'stash@{1}', branch: 'feature' }), new Set(['s']))
+  assert.deepEqual(findMatches(history, { ...emptyFilters, mergesOnly: true }), new Set(['a']))
+})

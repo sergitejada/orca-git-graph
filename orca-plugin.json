@@ -13,5 +13,5 @@
     "commands": [{ "id": "git-graph-refresh", "title": "Git Graph: Refrescar" }],
     "events": [{ "on": "agent.status.changed" }, { "on": "worktree.created" }]
   },
-  "capabilities": [{ "kind": "storage" }, { "kind": "events:subscribe" }]
+  "capabilities": [{ "kind": "storage" }, { "kind": "events:subscribe" }, { "kind": "workspace:read" }, { "kind": "terminal:send" }]
 }

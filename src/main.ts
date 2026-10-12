@@ -1,5 +1,5 @@
 import { readActiveRepo } from './focus.js'
-import { resetPanel, writePanel } from './render.js'
+import { resetPanel, writeLoadingPanel, writePanel } from './render.js'
 
 interface Orca {
   log(message: string): void
@@ -18,12 +18,13 @@ export interface WorkerDependencies {
   readActiveRepo: () => Promise<string | null>
   writePanel: (repo: string, isCurrent: () => Promise<boolean>) => Promise<boolean>
   resetPanel: () => Promise<void>
+  writeLoadingPanel: (repo?: string) => Promise<void>
   now: () => number
   setInterval: (handler: () => void, ms: number) => unknown
 }
 
 export default function activate(orca: Orca, dependencies: WorkerDependencies = {
-  readActiveRepo, writePanel, resetPanel, now: Date.now, setInterval,
+  readActiveRepo, writePanel, resetPanel, writeLoadingPanel, now: Date.now, setInterval,
 }): void {
   let repo: string | null | undefined
   let lastRefresh = 0
@@ -40,7 +41,13 @@ export default function activate(orca: Orca, dependencies: WorkerDependencies = 
         pending = false
         const forced = forceRefresh
         forceRefresh = false
+        const initial = repo === undefined
+        let loading = false
         try {
+          if (initial) {
+            await dependencies.writeLoadingPanel()
+            loading = true
+          }
           const selected = await dependencies.readActiveRepo()
           const selectionChanged = selected !== repo
           if (!selectionChanged && !forced && dependencies.now() - lastRefresh < GRAPH_REFRESH_MS) continue
@@ -48,6 +55,10 @@ export default function activate(orca: Orca, dependencies: WorkerDependencies = 
           if (selected === null) {
             if (selectionChanged) await dependencies.resetPanel()
           } else {
+            if (selectionChanged && !initial) {
+              await dependencies.writeLoadingPanel(selected)
+              loading = true
+            }
             const changed = await dependencies.writePanel(selected, async () => {
               if (await dependencies.readActiveRepo() === selected) return true
               pending = true
@@ -58,6 +69,10 @@ export default function activate(orca: Orca, dependencies: WorkerDependencies = 
           lastRefresh = dependencies.now()
         } catch (error) {
           orca.log(`error al generar el grafo: ${error instanceof Error ? error.message : String(error)}`)
+          if (loading) {
+            repo = undefined
+            await dependencies.resetPanel().catch(error => orca.log(`error al limpiar el panel: ${String(error)}`))
+          }
         }
       }
     })().finally(() => { running = null })

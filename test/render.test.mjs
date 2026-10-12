@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { execFileSync } from 'node:child_process'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-import { groupRefs, layout, panelFingerprint, parseLog, parseStatus, renderHtml, wipCommit } from '../render.mjs'
+import { buildPanel, groupRefs, layout, panelFingerprint, parseLog, parseStashes, parseStatus, renderHtml, withStashes, wipCommit } from '../render.mjs'
 
 const commit = (hash, parents, extra = {}) => ({
   hash,
@@ -15,6 +19,62 @@ const commit = (hash, parents, extra = {}) => ({
 
 // m fusiona f en a; f y a salen de b
 const history = [commit('m', ['a', 'f']), commit('f', ['b']), commit('a', ['b']), commit('b', [])]
+
+test('los stashes conservan su etiqueta y solo se conectan al primer padre', () => {
+  const record = ['stash@{1}', 's', 'a index untracked', 'refs/stash', 'On main: prueba', 'Ana', '1767261600', 'ana@example.com', 'On main: prueba\n'].join('\x1f') + '\x1e'
+  const [stash] = parseStashes(record)
+  assert.equal(stash.stash, 'stash@{1}')
+  assert.deepEqual(stash.parents, ['a'])
+  assert.deepEqual(stash.refs, [])
+  const rows = layout(withStashes([commit('a', [])], [stash]))
+  assert.deepEqual(rows.map(row => row.commit.hash), ['s', 'a'])
+  assert.deepEqual(rows[0].forks, [])
+  assert.equal(rows[1].hasIncoming, true)
+  const html = renderHtml({ repo: '/repo', branch: 'main', head: 'a', rows })
+  assert.ok(html.includes('<span class="name">stash@{1}</span>'))
+  assert.ok(html.includes('1 commit<!-- --> · 1 stash'))
+})
+
+test('Git carga todos los stashes y sus bases fuera de las ramas, sin snapshots internos', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-stashes-'))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  try {
+    git('init', '-b', 'main')
+    git('config', 'user.name', 'Ana')
+    git('config', 'user.email', 'ana@example.com')
+    await writeFile(join(repo, 'file.txt'), 'base')
+    git('add', '.')
+    git('commit', '-m', 'base')
+    const head = git('rev-parse', 'HEAD')
+    git('checkout', '--detach')
+    await writeFile(join(repo, 'file.txt'), 'detached')
+    git('commit', '-am', 'detached base')
+    const base = git('rev-parse', 'HEAD')
+    await writeFile(join(repo, 'file.txt'), 'first stash')
+    await writeFile(join(repo, 'untracked.txt'), 'untracked')
+    git('stash', 'push', '-u', '-m', 'primero')
+    const first = git('rev-parse', 'refs/stash')
+    const internal = [git('rev-parse', 'refs/stash^2'), git('rev-parse', 'refs/stash^3')]
+    git('checkout', 'main')
+    await writeFile(join(repo, 'file.txt'), 'second stash')
+    git('stash', 'push', '-m', 'segundo')
+    const second = git('rev-parse', 'refs/stash')
+    const html = await buildPanel(repo)
+    const payload = JSON.parse(html.match(/id="git-graph-data">([\s\S]*?)<\/script>/)[1])
+    const rows = payload.rows
+    assert.deepEqual(rows.filter(row => row.commit.stash).map(row => row.commit.stash).sort(), ['stash@{0}', 'stash@{1}'])
+    assert.equal(rows.length, 4)
+    for (const hash of internal) assert.ok(!rows.some(row => row.commit.hash === hash))
+    for (const [stash, parent] of [[first, base], [second, head]]) {
+      const index = rows.findIndex(row => row.commit.hash === stash)
+      assert.deepEqual(rows[index].commit.parents, [parent])
+      assert.ok(index < rows.findIndex(row => row.commit.hash === parent))
+    }
+    git('stash', 'drop', 'stash@{0}')
+    const updated = await buildPanel(repo)
+    assert.notEqual(panelFingerprint(html), panelFingerprint(updated))
+  } finally { await rm(repo, { recursive: true, force: true }) }
+})
 
 test('una rama que sale y vuelve ocupa un segundo carril', () => {
   const rows = layout(history)
