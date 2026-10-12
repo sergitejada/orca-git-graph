@@ -57,6 +57,7 @@ tbody tr:hover td { background: rgba(128,128,128,.15); }
   border: 1px solid rgba(128,128,128,.75); border-radius: 4px; overflow: hidden;
   background: rgba(128,128,128,.12); font-size: 12px; line-height: 16px;
 }
+.icon-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .ref .ico { display: flex; align-items: center; padding: 0 4px; }
 .ref .ico svg { height: 12px; width: auto; fill: #fff; }
 .ref .name { padding: 0 5px; }
@@ -70,7 +71,6 @@ button:hover { background: rgba(128,128,128,.15); }
 button:disabled { opacity: .4; cursor: default; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--focus-border, #007fd4); outline-offset: 1px; }
 .icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 24px; height: 24px; padding: 4px; border: 0; color: var(--muted-foreground, #999); }
-.icon-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .icon-button[aria-expanded=true], .icon-button[data-active] { background: rgba(128,128,128,.15); }
 .filter-indicator { position: absolute; top: 3px; right: 3px; width: 4px; height: 4px; border-radius: 50%; background: var(--focus-border, #007fd4); }
 fieldset.toolbar, fieldset.branch-selector { margin: 0; min-width: 0; border: 0; }
@@ -98,7 +98,8 @@ input[type=search], input[readonly], select { color: inherit; background: var(--
 .filter-options select { max-width: 180px; }
 .filter-options .merge-filter { color: inherit; }
 .no-matches { border-top: 1px solid rgba(128,128,128,.2); }
-#root { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+#root { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+@supports (height: 100dvh) { #root { height: 100dvh; } }
 #root > :not(.workspace) { flex-shrink: 0; }
 .workspace { display: grid; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; }
 .graph-list { container-type: inline-size; container-name: graph-list; min-width: 0; min-height: 0; width: 100%; overflow: auto; }
@@ -160,6 +161,10 @@ tbody tr.selected td:not(.graph) { opacity: 1; }
 .stash-dialog label { display: grid; gap: 5px; margin: 12px 0; }
 .stash-dialog input { font: inherit; color: inherit; padding: 5px 7px; border: 1px solid var(--border, #454545); background: var(--panel-background); }
 .stash-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.panel-state-dialog { color: var(--popover-foreground, #ccc); }
+.panel-state-dialog::backdrop { background: rgba(0,0,0,.45); }
+.panel-state-dialog textarea { box-sizing: border-box; width: 100%; min-height: 100px; resize: vertical; font: inherit; color: inherit; background: var(--panel-background); border: 1px solid var(--border, #454545); }
+.panel-state-dialog .stash-dialog-buttons { flex-wrap: wrap; }
 .stash-repo, .stash-notice { overflow-wrap: anywhere; font-size: 11px; color: var(--muted-foreground, #999); }
 .stash-notice { margin: 0; padding: 8px 10px; }
 .view-options-menu { position: fixed; z-index: 10; width: 230px; max-width: calc(100vw - 20px); max-height: calc(100vh - 8px); overflow: auto; padding: 4px; border: 1px solid var(--border, #454545); border-radius: 4px; background: var(--popover, #202020); color: var(--popover-foreground, #ccc); box-shadow: 0 5px 18px rgba(0,0,0,.45); }

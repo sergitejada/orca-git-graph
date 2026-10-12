@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdir } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { chromium } from 'playwright-core'
-import { layout, renderHtml, wipCommit } from '../render.mjs'
+import { buildPanel, layout, renderHtml, wipCommit } from '../render.mjs'
 
 // Reproduce el sandbox y la CSP de src/shared/plugins/plugin-panel-shell.ts de Orca.
 const csp = "default-src 'none'; connect-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
@@ -47,6 +49,191 @@ test('upstream se hidrata con etiquetas accesibles y sin desbordamiento en sideb
     }
     assert.deepEqual(errors, [])
     assert.deepEqual(requests, [])
+  } finally { await browser.close() }
+})
+
+test('Git real: la vista sin commits se hidrata y pasa al primer commit sin conexiones inventadas', { timeout: 30000 }, async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'orca-unborn-browser-'))
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  try {
+    git('init', '-b', 'first/branch')
+    git('config', 'user.name', 'Ana')
+    git('config', 'user.email', 'ana@example.com')
+    const page = await browser.newPage({ viewport: { width: 360, height: 720 } })
+    page.setDefaultTimeout(5000)
+    const errors = []
+    const requests = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    page.on('request', request => requests.push(request.url()))
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="border:0;width:100%;height:700px"></iframe>')
+    const show = async () => page.locator('#panel').evaluate((element, srcdoc) => { element.srcdoc = srcdoc }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${await buildPanel(repo)}`)
+    const frame = page.frameLocator('#panel')
+    await show()
+    await frame.getByRole('status').getByText(/No hay archivos pendientes del primer commit/).waitFor()
+    assert.equal(await frame.locator('header b').nth(1).textContent(), 'first/branch')
+    assert.equal(await frame.locator('table, .error, .graph').count(), 0)
+
+    await writeFile(join(repo, 'staged.txt'), 'first\n')
+    git('add', '--', 'staged.txt')
+    await writeFile(join(repo, 'pending.txt'), 'pending\n')
+    await show()
+    await frame.getByRole('status').getByText('Archivos pendientes del primer commit.', { exact: false }).waitFor()
+    assert.equal(await frame.locator('tbody tr').count(), 1)
+    assert.equal(await frame.locator('.graph path').count(), 0)
+    assert.equal(await frame.locator('.graph circle').count(), 1)
+    assert.equal(await frame.getByRole('button', { name: 'Ir a HEAD' }).isDisabled(), true)
+    await frame.locator('tr[data-hash="WORKING_TREE"]').press('Enter')
+    await frame.locator('.changes-list').getByText('staged.txt', { exact: true }).waitFor()
+    await frame.locator('.changes-list').getByText('pending.txt', { exact: true }).waitFor()
+    await frame.getByRole('button', { name: 'Abrir búsqueda' }).click()
+    await frame.getByLabel('Buscar commits').fill('pending.txt')
+    assert.equal(await frame.locator('tr.wip.dimmed').count(), 0)
+    assert.equal(await frame.locator('body').evaluate(element => element.scrollWidth <= document.documentElement.clientWidth), true)
+    await mkdir('test-artifacts', { recursive: true })
+    await page.screenshot({ path: 'test-artifacts/unborn-repository.png' })
+
+    git('-c', 'commit.gpgsign=false', 'commit', '-m', 'First commit')
+    await show()
+    await frame.getByText('First commit', { exact: true }).waitFor()
+    assert.equal(await frame.getByText(/todavía no tiene commits/).count(), 0)
+    assert.equal(await frame.locator('tbody tr').count(), 2)
+    assert.equal(await frame.locator('.graph path').count(), 2)
+    await frame.getByRole('button', { name: 'Ir a HEAD' }).click()
+    assert.equal(await frame.getByLabel('Hash completo').inputValue(), git('rev-parse', 'HEAD'))
+    assert.deepEqual(errors, [])
+    assert.deepEqual(requests, [])
+  } finally {
+    await browser.close()
+    await rm(repo, { recursive: true, force: true })
+  }
+})
+
+test('restaura una instantánea validada después de reemplazar el iframe opaco, sin almacenamiento ni bridge', { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 360, height: 720 } })
+    page.setDefaultTimeout(5000)
+    const errors = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    await page.setContent('<main id="host"></main>')
+    await page.evaluate(() => {
+      window.panelRequests = []
+      window.addEventListener('message', event => { if (event.data?.type === 'orca-panel-action') window.panelRequests.push(event.data.action) })
+    })
+    const history = Array.from({ length: 65 }, (_, index) => ({
+      ...commit(`c${index}`, index === 64 ? [] : [`c${index + 1}`], index === 0 ? ['HEAD -> main', 'origin/main'] : []),
+      message: `commit c${index}\n${'Long commit message\n'.repeat(100)}`,
+    }))
+    history.unshift({ ...commit('stash', ['c0']), stash: 'stash@{0}' }, commit('remote', ['c0'], ['origin/topic']))
+    const show = async (repo, commits = history) => {
+      const html = renderHtml({ repo, branch: 'main', head: 'c0', remotes: ['origin'], rows: layout(commits) })
+      // Orca keys the iframe by document revision: replace the element, not
+      // just its srcdoc. window.name and history cannot cross this boundary.
+      await page.locator('#host').evaluate((host, srcdoc) => {
+        const iframe = document.createElement('iframe')
+        iframe.id = 'panel'
+        iframe.name = 'orca-plugin-panel:git-graph:graph'
+        iframe.setAttribute('sandbox', 'allow-scripts')
+        iframe.style.cssText = 'border:0;width:100%;height:700px'
+        iframe.srcdoc = srcdoc
+        host.replaceChildren(iframe)
+      }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${html}`)
+      await page.frameLocator('#panel').getByRole('button', { name: 'Estado del panel', exact: true }).waitFor()
+    }
+    await show('/repo')
+    const frame = page.frameLocator('#panel')
+    assert.equal(await frame.locator('body').evaluate(() => {
+      try { localStorage.setItem('state', 'x'); return 'available' } catch (error) { return error.name }
+    }), 'SecurityError')
+    await frame.getByRole('button', { name: 'Opciones del grafo', exact: true }).click()
+    await frame.getByRole('menuitemcheckbox', { name: 'Mostrar ramas remotas' }).click()
+    await frame.getByRole('menuitemcheckbox', { name: 'Mostrar stashes' }).click()
+    await frame.getByRole('menuitemcheckbox', { name: 'Mostrar stashes' }).press('Escape')
+    await frame.getByLabel('Filtrar por rama').click()
+    await frame.getByRole('option', { name: 'main', exact: true }).click()
+    await frame.getByRole('button', { name: 'Abrir búsqueda', exact: true }).click()
+    await frame.getByRole('searchbox', { name: 'Buscar commits' }).fill('commit')
+    await frame.getByRole('button', { name: 'Filtros', exact: true }).click()
+    await frame.getByLabel('Filtrar por autor').selectOption('Ana')
+    await frame.getByRole('checkbox', { name: 'Solo merges' }).check()
+    await frame.locator('tr[data-hash="c40"]').click()
+    await frame.getByRole('separator').press('End')
+    await frame.locator('tr[data-hash="c40"]').focus()
+    await frame.locator('.graph-list').evaluate(element => { element.scrollTop = 450 })
+    await frame.locator('.details').evaluate(element => { element.scrollTop = 160 })
+    await frame.getByRole('button', { name: 'Estado del panel', exact: true }).click()
+    const snapshot = await frame.getByLabel('Instantánea del panel').inputValue()
+    const saved = JSON.parse(snapshot)
+    assert.deepEqual(saved.scroll, { graph: 450, details: 160 })
+    assert.deepEqual(saved.focus, { kind: 'row', value: 'c40' })
+    assert.equal(saved.detailsHeight, 75)
+    await frame.getByRole('button', { name: 'Cerrar', exact: true }).press('Escape')
+    assert.equal(await frame.getByRole('dialog').count(), 0)
+    // Closing the state dialog does not trigger the panel's Escape shortcut.
+    assert.equal(await frame.locator('tr[aria-selected="true"]').getAttribute('data-hash'), 'c40')
+    await show('/repo')
+    assert.equal(await frame.locator('.details').count(), 0)
+    assert.equal(await frame.getByRole('searchbox', { name: 'Buscar commits' }).count(), 0)
+    assert.equal(await frame.locator('tbody tr').count(), history.length)
+    const restore = async text => {
+      await frame.getByRole('button', { name: 'Estado del panel', exact: true }).click()
+      await frame.getByLabel('Instantánea del panel').fill(text)
+      await frame.getByRole('button', { name: 'Restaurar', exact: true }).click()
+    }
+    await restore(snapshot)
+    await frame.getByRole('dialog').waitFor({ state: 'detached' })
+    assert.equal(await frame.getByRole('searchbox', { name: 'Buscar commits' }).inputValue(), 'commit')
+    assert.equal(await frame.getByLabel('Filtrar por autor').inputValue(), 'Ana')
+    assert.equal(await frame.getByRole('checkbox', { name: 'Solo merges' }).isChecked(), true)
+    assert.match(await frame.getByLabel('Filtrar por rama').innerText(), /main/)
+    assert.equal(await frame.locator('tbody tr').count(), 65)
+    assert.equal(await frame.locator('tr[aria-selected="true"]').getAttribute('data-hash'), 'c40')
+    assert.equal(await frame.getByRole('separator').getAttribute('aria-valuenow'), '75')
+    assert.equal(await frame.locator('tr[data-hash="c40"]').evaluate(element => element === document.activeElement), true)
+    assert.equal(await frame.locator('.graph-list').evaluate(element => element.scrollTop), 450)
+    assert.equal(await frame.locator('.details').evaluate(element => element.scrollTop), 160)
+    // Exact repo paths isolate identical repository names.
+    await show('/other/repo')
+    await restore(snapshot)
+    await frame.getByRole('status').filter({ hasText: 'otro repositorio o worktree' }).waitFor()
+    assert.equal(await frame.locator('.details').count(), 0)
+    await frame.getByLabel('Instantánea del panel').fill('{broken')
+    await frame.getByRole('button', { name: 'Restaurar', exact: true }).click()
+    await frame.getByRole('status').filter({ hasText: 'JSON válido' }).waitFor()
+    assert.equal(await frame.locator('.details').count(), 0)
+    // Block clipboard APIs to exercise the explicit manual-copy fallback.
+    await frame.locator('body').evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', { value: undefined })
+      document.execCommand = () => false
+    })
+    await frame.getByRole('button', { name: 'Copiar actual', exact: true }).click()
+    await frame.getByRole('status').filter({ hasText: 'Pulsa Ctrl+C' }).waitFor()
+    const copySelection = await frame.getByLabel('Instantánea del panel').evaluate(element => ({ selected: element.selectionEnd - element.selectionStart, length: element.value.length, path: JSON.parse(element.value).repoPath }))
+    assert.equal(copySelection.selected, copySelection.length)
+    assert.equal(copySelection.path, JSON.parse(await frame.locator('#git-graph-data').textContent()).repoPath)
+    await show('/repo', history.filter(entry => entry.hash !== 'c40'))
+    await restore(snapshot)
+    await frame.getByRole('dialog').waitFor({ state: 'detached' })
+    assert.equal(await frame.locator('.details').count(), 0)
+    assert.equal(await frame.locator('tr[data-hash="c0"]').evaluate(element => element === document.activeElement), true)
+    assert.equal(await frame.getByRole('searchbox', { name: 'Buscar commits' }).inputValue(), 'commit')
+    // Restore a control focus and uncommitted view option too.
+    await show('/repo', [wipCommit([{ x: ' ', y: 'M', path: 'file.ts' }], 'c0'), ...history])
+    const working = { ...saved, filters: { ...saved.filters, query: '<img src=x onerror=alert(1)>' }, selectedHash: 'WORKING_TREE', focusHash: 'WORKING_TREE', focus: { kind: 'control', value: 'Buscar commits' }, changesView: 'list', scroll: { graph: 0, details: 0 } }
+    await restore(JSON.stringify(working))
+    await frame.getByRole('dialog').waitFor({ state: 'detached' })
+    assert.equal(await frame.getByRole('button', { name: 'Ver como lista' }).getAttribute('aria-pressed'), 'true')
+    assert.equal(await frame.getByRole('searchbox', { name: 'Buscar commits' }).evaluate(element => element === document.activeElement), true)
+    assert.equal(await frame.getByRole('searchbox', { name: 'Buscar commits' }).inputValue(), working.filters.query)
+    assert.equal(await frame.locator('img').count(), 0)
+    await page.setViewportSize({ width: 200, height: 720 })
+    await frame.getByRole('button', { name: 'Estado del panel', exact: true }).click()
+    assert.equal(await frame.getByRole('dialog').evaluate(element => element.scrollWidth <= element.clientWidth), true)
+    assert.deepEqual(await page.evaluate(() => window.panelRequests), [])
+    assert.deepEqual(errors, [])
   } finally { await browser.close() }
 })
 
