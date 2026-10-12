@@ -69,3 +69,22 @@ test('las opciones ocultan remotas y stashes conservando ancestros y nombres loc
   assert.deepEqual(localOnly.rows[0].after, ['b'])
   assert.deepEqual(visibleHistory(history, refs, 'a', { remoteBranches: true, stashes: false }).rows.map(row => row.commit.hash), ['r', 'a', 'b'])
 })
+
+
+test('history requests are bounded, idempotent and reject old selections and ranges', async () => {
+  const { applyHistoryRequest } = await import('../src/history.js')
+  const state = { repo: '/repo', session: 'current', limit: 250, targets: [] as string[] }
+  const request = { session: 'current', limit: 250 }
+  const next = applyHistoryRequest(state, request)
+  assert.equal(next.limit, 500)
+  assert.equal(applyHistoryRequest(next, request), next)
+  assert.equal(applyHistoryRequest(state, { ...request, session: 'previous' }), state)
+  assert.equal(applyHistoryRequest({ ...state, limit: 5000 }, { ...request, limit: 5000 }).limit, 5000)
+  const target = 'a'.repeat(40)
+  const withParent = applyHistoryRequest(state, { ...request, target })
+  assert.deepEqual(withParent.targets, [target])
+  assert.equal(withParent.focus, target)
+  assert.equal(applyHistoryRequest(withParent, { ...request, target }), withParent)
+  assert.throws(() => applyHistoryRequest(state, { ...request, target: '--all' }), /inválido/)
+  assert.throws(() => applyHistoryRequest({ ...state, targets: Array.from({ length: 32 }, (_, i) => String(i).padStart(40, '0')) }, { ...request, target }), /32 padres/)
+})

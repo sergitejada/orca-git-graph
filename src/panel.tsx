@@ -143,10 +143,11 @@ export function Panel(data: PanelData) {
   return <LoadedPanel {...data} />
 }
 
-function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows: allRows, refsByCommit: allRefs, now, error }: PanelData) {
+function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows: allRows, refsByCommit: allRefs, now, error, history }: PanelData) {
   const [viewOptions, setViewOptions] = useState(defaultViewOptions)
   const { rows, refsByCommit } = useMemo(() => visibleHistory(allRows, allRefs, head, viewOptions), [allRows, allRefs, head, viewOptions])
-  const [repositoryAction, setRepositoryAction] = useState<'refresh' | 'fetch' | null>(null)
+  const [repositoryAction, setRepositoryAction] = useState<'refresh' | 'fetch' | 'history' | null>(null)
+  const [historyTarget, setHistoryTarget] = useState<string | undefined>()
   const actionButton = useRef<HTMLButtonElement | null>(null)
   const [showSearch, setShowSearch] = useState(false)
   const searchButton = useRef<HTMLButtonElement>(null)
@@ -154,11 +155,11 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
   const [notice, setNotice] = useState('')
   const [filters, setFilters] = useState(emptyFilters)
   const [showFilters, setShowFilters] = useState(false)
-  const [selectedHash, setSelectedHash] = useState<string | null>(null)
+  const [selectedHash, setSelectedHash] = useState<string | null>(history?.focus ?? null)
   const [detailsHeight, setDetailsHeight] = useState(40)
   const workspace = useRef<HTMLDivElement>(null)
   const resizeStart = useRef<{ y: number; height: number; available: number } | null>(null)
-  const [focusHash, setFocusHash] = useState(rows.some(row => row.commit.hash === head) ? head : rows[0]?.commit.hash || '')
+  const [focusHash, setFocusHash] = useState(history?.focus ?? (rows.some(row => row.commit.hash === head) ? head : rows[0]?.commit.hash || ''))
   const searchInput = useRef<HTMLInputElement>(null)
   const rowElements = useRef(new Map<string, HTMLTableRowElement>())
   const matches = useMemo(() => findMatches(rows, filters), [rows, filters])
@@ -174,8 +175,12 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
   useEffect(() => { if (showSearch) searchInput.current?.focus() }, [showSearch])
 
   useEffect(() => {
-    if (selectedHash) rowElements.current.get(selectedHash)?.scrollIntoView({ block: 'nearest' })
-  }, [selectedHash])
+    if (selectedHash) {
+      const element = rowElements.current.get(selectedHash)
+      element?.scrollIntoView({ block: 'nearest' })
+      if (selectedHash === history?.focus) element?.focus({ preventScroll: true })
+    }
+  }, [selectedHash, history?.focus])
 
   const selectHash = (hash: string) => {
     setSelectedHash(hash)
@@ -183,6 +188,11 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
     const element = rowElements.current.get(hash)
     element?.focus({ preventScroll: true })
     element?.scrollIntoView({ block: 'nearest' })
+  }
+  const loadHistory = (target?: string) => {
+    if (document.activeElement instanceof HTMLButtonElement) actionButton.current = document.activeElement
+    setHistoryTarget(target)
+    setRepositoryAction('history')
   }
   const navigate = (direction: number, from = selectedHash || focusHash) => {
     if (!matchingRows.length) return
@@ -231,7 +241,7 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
             if (!nextRows.some(row => row.commit.hash === focusHash)) setFocusHash(nextRows.some(row => row.commit.hash === head) ? head : nextRows[0]?.commit.hash || '')
             setStashMenu(null)
           }} />
-          <button type="button" className="icon-button" aria-label="Filtros" title={filterCount ? `Filtros (${filterCount})` : 'Filtros'} aria-expanded={showFilters} aria-controls="history-filters" data-active={filterCount > 0 || undefined} onClick={() => setShowFilters(!showFilters)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18l-7 8v7l-4 2v-9Z" /></svg>{filterCount ? <span className="filter-indicator" aria-label={`${filterCount} filtros activos`} /> : null}</button>
+          <button type="button" className="icon-button" aria-label="Filtros" title={filterCount ? `Filtros (${filterCount})` : 'Filtros'} aria-expanded={showFilters} aria-controls="history-filters" data-active={filterCount > 0 || undefined} onClick={() => setShowFilters(!showFilters)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18l-7 8v7l-4 2v-9Z" /></svg>{filterCount ? <span className="filter-indicator" role="img" aria-label={`${filterCount} filtros activos`} /> : null}</button>
         </> : null}
       </div>
     </header>
@@ -239,6 +249,12 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
     {notice ? <p className="stash-notice" role="status">{notice}</p> : null}
     {!error && !allRows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
     {allRows.length ? <>
+      {history ? <div className="history-scope" role="status">
+        <span>{history.count} commits cargados · {history.incomplete ? 'Historial incompleto' : 'Historial completo'}. Búsqueda y filtros solo en el historial cargado.</span>
+        {history.incomplete ? <button type="button" disabled={history.capped || !history.session || !repoPath || !actionModule} onClick={event => { actionButton.current = event.currentTarget; loadHistory() }}>Cargar anteriores</button> : null}
+        {history.capped ? <span>Límite de 5000 commits; puedes cargar padres individuales.</span> : null}
+        {history.notice ? <span>{history.notice}</span> : null}
+      </div> : null}
       <div className="branch-toolbar"><BranchSelector branches={branches} value={filters.branch} onChange={branch => setFilters({ ...filters, branch })} /></div>
       {filtered ? <fieldset className="toolbar" aria-label="Explorar historial"><button type="button" onClick={() => setFilters(emptyFilters)}>Limpiar</button></fieldset> : null}
       {showSearch ? <div className="search-toolbar" id="commit-search"><input ref={searchInput} type="search" aria-label="Buscar commits" placeholder="Buscar mensaje, autor, hash… (/)" value={filters.query} onChange={event => setFilters({ ...filters, query: event.target.value })} /><button type="button" aria-label="Cerrar búsqueda" title="Cerrar búsqueda" onClick={() => { setShowSearch(false); setFilters({ ...filters, query: '' }); searchButton.current?.focus() }}>×</button></div> : null}
@@ -246,7 +262,7 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
         <label>Autor<select aria-label="Filtrar por autor" value={filters.author} onChange={event => setFilters({ ...filters, author: event.target.value })}><option value="">Todos los autores</option>{authors.map(name => <option key={name} value={name}>{name}</option>)}</select></label>
         <label className="merge-filter"><input type="checkbox" checked={filters.mergesOnly} onChange={event => setFilters({ ...filters, mergesOnly: event.target.checked })} />Solo merges</label>
       </div> : null}
-      {filtered && !matchingRows.length ? <div className="hint no-matches">Sin coincidencias. Cambia la búsqueda o limpia los filtros.</div> : null}
+      {filtered && !matchingRows.length ? <div className="hint no-matches">Sin coincidencias en el historial cargado. Cambia la búsqueda o limpia los filtros.</div> : null}
       <div ref={workspace} className={`workspace${selected ? ' details-open' : ''}`} style={selected ? { gridTemplateRows: `minmax(0, ${100 - detailsHeight}fr) 8px minmax(0, ${detailsHeight}fr)` } : undefined}>
       <div className="graph-list"><table onKeyDown={tableKeyDown} aria-label="Historial de commits">
       <thead><tr><th className="graph" style={{ minWidth: 12 + Math.max(28, 2 * PAD + (Math.max(1, ...rows.map(row => Math.max(row.before.length, row.after.length))) - 1) * LANE) }}>Grafo</th><th className="desc">Descripción</th><th className="date">Fecha</th><th className="author">Autor</th><th className="hash">Commit</th></tr></thead>
@@ -260,6 +276,7 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
       }} onRowRef={element => { if (element) rowElements.current.set(row.commit.hash, element); else rowElements.current.delete(row.commit.hash) }} />)}</tbody>
       </table></div>
       {selected ? <>
+        {/* biome-ignore lint/a11y/useSemanticElements: interactive adjustable splitter, not a thematic break */}
         <div className="details-resizer" role="separator" tabIndex={0} aria-label="Ajustar altura de los detalles" aria-orientation="horizontal" aria-controls="commit-details" aria-valuemin={20} aria-valuemax={75} aria-valuenow={Math.round(detailsHeight)} aria-valuetext={`${Math.round(detailsHeight)}% del panel`} onPointerDown={event => {
           if (event.button !== 0 || !workspace.current) return
           event.preventDefault()
@@ -277,12 +294,12 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
           event.preventDefault()
           resizeDetails(event.key === 'Home' ? 20 : event.key === 'End' ? 75 : detailsHeight + (event.key === 'ArrowUp' ? 5 : -5))
         }} />
-        <Details key={selected.commit.hash} row={selected} loadedHashes={loadedHashes} onClose={() => { setSelectedHash(null); rowElements.current.get(selected.commit.hash)?.focus({ preventScroll: true }) }} onJump={selectHash} />
+        <Details key={selected.commit.hash} row={selected} loadedHashes={loadedHashes} onClose={() => { setSelectedHash(null); rowElements.current.get(selected.commit.hash)?.focus({ preventScroll: true }) }} onJump={selectHash} onLoadParent={history?.session ? loadHistory : undefined} />
       </> : null}
       </div>
     </> : null}
     {stashMenu ? <StashMenu key={stashMenu.hash} {...stashMenu} repo={repoPath} onNotice={setNotice} onClose={() => { setStashMenu(null); rowElements.current.get(stashMenu.hash)?.focus({ preventScroll: true }) }} /> : null}
-    {repositoryAction ? <RepositoryActionDialog action={repositoryAction} repo={repoPath} module={actionModule} onNotice={setNotice} onClose={() => { setRepositoryAction(null); actionButton.current?.focus() }} /> : null}
+    {repositoryAction ? <RepositoryActionDialog action={repositoryAction} history={history ? { session: history.session, limit: history.limit, target: historyTarget } : undefined} repo={repoPath} module={actionModule} onNotice={setNotice} onClose={() => { setRepositoryAction(null); actionButton.current?.focus() }} /> : null}
   </>
 }
 

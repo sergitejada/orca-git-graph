@@ -62,9 +62,11 @@ El worktree mostrado es el **seleccionado en Orca**. Como la API pública de plu
 
 - **Solo funciona como plugin en desarrollo.** Los plugins instalados desde un marketplace viven en una carpeta inmutable que Orca verifica por hash, y este plugin necesita reescribir su `panel.html`. Mientras la API de plugins no deje al panel recibir datos del worker, no se puede publicar en un marketplace.
 - Si Orca cierra el worker por inactividad, el grafo se actualiza con la siguiente actividad de un agente o con **Git Graph: Refrescar**.
-- Muestra los últimos 250 commits.
+- Carga inicialmente 250 commits. **Cargar anteriores** añade bloques de 250 hasta 5000 commits por selección; el panel indica si el historial está incompleto. **Cargar padre** permite navegar fuera del rango, con un máximo de 32 padres adicionales. Los hashes y padres reales se conservan y no se duplican commits. El rango se conserva al refrescar y se reinicia al cambiar de selección o reiniciar el worker; las solicitudes antiguas se descartan.
+- Las acciones de historial requieren elegir una terminal de shell libre con Node y Git. El bridge no permite llamar directamente al worker: la terminal envía una solicitud local al plugin y el worker la procesa en el siguiente refresco (hasta 4 s). No se escribe en el estado de Orca. Los padres ausentes en Git local se indican en el panel.
+- Para limitar coste y volumen, se muestran como máximo los 250 stashes más recientes y se avisa si hay más. Cada lectura de Git tiene un límite de 15 s y 16 MiB de salida; el panel muestra el error si se supera.
 - La detección del foco depende del formato del estado local de Orca y podría necesitar adaptación si este cambia. Usa la carpeta de datos habitual de Orca o `ORCA_USER_DATA_PATH` cuando está disponible. Los worktrees remotos no se renderizan con el Git local; se vacía el panel al seleccionarlos.
-- La búsqueda y los filtros operan sobre esos commits cargados. La copia del hash ofrece selección manual si el iframe bloquea el portapapeles.
+- La búsqueda y los filtros operan sobre el historial cargado, como indica el panel; no buscan en todo el repositorio. La copia del hash ofrece selección manual si el iframe bloquea el portapapeles.
 
 ## Desarrollo
 

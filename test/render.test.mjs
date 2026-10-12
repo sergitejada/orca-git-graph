@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, writeFile, rm, copyFile, readFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -241,4 +241,80 @@ test('git log conserva el mensaje completo y el email para los detalles', () => 
   const html = renderHtml({ repo: '/repo', branch: 'main', head: 'abc', rows: layout([commit]) })
   const json = html.match(/<script type="application\/json" id="git-graph-data">([\s\S]*?)<\/script>/)[1]
   assert.equal(JSON.parse(json).rows[0].commit.message, commit.message)
+})
+
+
+test('carga bloques de más de 250 commits, ramas, stashes y padres externos sin duplicados', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'git-graph-history-'))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim()
+  const data = html => JSON.parse(html.match(/id="git-graph-data">([\s\S]*?)<\/script>/)[1])
+  try {
+    git('init', '-q', '-b', 'main')
+    git('config', 'user.name', 'History Test')
+    git('config', 'user.email', 'history@example.com')
+    let input = ''
+    for (let i = 1; i <= 620; i++) {
+      const message = `commit ${i}\n`
+      input += `commit refs/heads/main\nmark :${i}\ncommitter History Test <history@example.com> ${1700000000 + i} +0000\ndata ${Buffer.byteLength(message)}\n${message}${i > 1 ? `from :${i - 1}\n` : ''}\n`
+    }
+    execFileSync('git', ['fast-import', '--quiet'], { cwd: repo, input, windowsHide: true })
+    git('reset', '--hard', 'HEAD')
+    git('branch', 'older-branch', 'HEAD~400')
+    const side = git('commit-tree', 'HEAD~400^{tree}', '-p', 'HEAD~400', '-m', 'divergent side commit')
+    git('update-ref', 'refs/heads/side-branch', side)
+    const merge = git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-p', side, '-m', 'merge side history')
+    git('update-ref', 'refs/heads/main', merge)
+    git('reset', '--hard', 'HEAD')
+    await writeFile(join(repo, 'stash.txt'), 'stash content')
+    git('stash', 'push', '-u', '-m', 'history stash')
+    const initial = data(await buildPanel(repo))
+    const ordinary = panel => panel.rows.filter(row => !row.commit.wip && !row.commit.stash)
+    assert.equal(ordinary(initial).length, 250)
+    assert.equal(ordinary(initial)[0].commit.parents.length, 2)
+    assert.ok(initial.rows.some(row => row.col > 0))
+    assert.equal(initial.history.incomplete, true)
+    assert.equal(initial.rows.filter(row => row.commit.stash).length, 1)
+    const boundary = ordinary(initial).at(-1).commit
+    const parent = boundary.parents[0]
+    assert.ok(parent)
+    assert.equal(initial.rows.some(row => row.commit.hash === parent), false)
+    const state = { repo, session: 'test-session', limit: 500, targets: [] }
+    const expanded = data(await buildPanel(repo, state))
+    assert.equal(ordinary(expanded).length, 500)
+    assert.ok(initial.rows.every(row => expanded.rows.some(next => next.commit.hash === row.commit.hash)))
+    assert.ok(expanded.rows.some(row => row.commit.refs.includes('older-branch')))
+    const targeted = data(await buildPanel(repo, { ...state, limit: 250, targets: [parent, parent], focus: parent }))
+    assert.equal(ordinary(targeted).length, 251)
+    assert.deepEqual(targeted.rows.find(row => row.commit.hash === boundary.hash).commit.parents, boundary.parents)
+    assert.equal(new Set(targeted.rows.map(row => row.commit.hash)).size, targeted.rows.length)
+    const full = data(await buildPanel(repo, { ...state, limit: 750 }))
+    assert.equal(ordinary(full).length, 622)
+    assert.equal(full.history.incomplete, false)
+    assert.equal(full.rows.filter(row => row.commit.stash).length, 1)
+    const missing = data(await buildPanel(repo, { ...state, targets: ['f'.repeat(40)] }))
+    assert.ok(missing.history.notice.includes('no está disponible'))
+
+    // Isolated plugin files: exercise the real terminal mailbox and renderer, never the shared panel.
+    const plugin = join(repo, 'plugin-test')
+    await mkdir(plugin)
+    await copyFile(new URL('../render.mjs', import.meta.url), join(plugin, 'render.mjs'))
+    const renderer = await import(pathToFileURL(join(plugin, 'render.mjs')).href)
+    const session = await renderer.resetHistory(repo)
+    const request = { session: session.session, limit: 250 }
+    await renderer.runHistoryAction(repo, request, async () => repo)
+    await Promise.all([renderer.writePanel(repo, async () => true, true), renderer.writePanel(repo, async () => true, true)])
+    const stored = () => readFile(join(plugin, 'history.state.json'), 'utf8').then(JSON.parse)
+    assert.equal((await stored()).limit, 500)
+    const published = data(await readFile(join(plugin, 'panel.html'), 'utf8'))
+    assert.equal(ordinary(published).length, 500)
+    await assert.rejects(renderer.runHistoryAction(repo, request, async () => repo), /historial ha cambiado/)
+    await assert.rejects(renderer.runHistoryAction(repo, { ...request, limit: 500 }, async () => '/other'), /seleccionado ha cambiado/)
+    await renderer.resetHistory('/other')
+    assert.equal(await renderer.writePanel(repo, async () => false, true), false)
+    assert.equal((await stored()).repo, '/other')
+    await renderer.resetHistory(repo)
+    await renderer.writePanel(repo, async () => true, true)
+    assert.equal((await stored()).limit, 250, 'the old mailbox cannot expand a new selection session')
+
+  } finally { await rm(repo, { recursive: true, force: true }) }
 })

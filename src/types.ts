@@ -69,6 +69,21 @@ export interface PanelData {
   now: string
   error: string
   loading?: boolean
+  history?: HistoryInfo
+}
+
+export interface HistoryRequest {
+  session: string
+  limit: number
+  target?: string
+}
+
+export interface HistoryInfo extends HistoryRequest {
+  count: number
+  incomplete: boolean
+  capped: boolean
+  focus?: string
+  notice?: string
 }
 
 export interface RenderOptions {
@@ -80,4 +95,5 @@ export interface RenderOptions {
   now?: Date | null
   error?: string
   loading?: boolean
+  history?: HistoryInfo
 }

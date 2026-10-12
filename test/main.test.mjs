@@ -13,12 +13,14 @@ function worker() {
   const errors = []
   const loading = []
   const operations = []
+  const historySelections = []
   activate({
     log: message => errors.push(message),
     commands: { register: (_id, handler) => { command = handler } },
     events: { on: (event, handler) => events.set(event, handler) },
   }, {
     readActiveRepo: async () => { operations.push('read'); return selected },
+    prepareHistory: async repo => { historySelections.push(repo) },
     writeLoadingPanel: async repo => { loading.push(repo ?? ''); operations.push('loading') },
     writePanel: async (repo, isCurrent) => {
       await beforePublish(repo)
@@ -31,7 +33,7 @@ function worker() {
     setInterval: (handler, ms) => { assert.equal(ms, 1000); tick = handler },
   })
   return {
-    published, errors, events, loading, operations,
+    published, errors, events, loading, operations, historySelections,
     command: () => command(),
     ready: () => new Promise(resolve => setImmediate(resolve)),
     tick: async () => { tick(); await new Promise(resolve => setImmediate(resolve)) },
@@ -130,3 +132,17 @@ test('sin selección limpia el grafo del proyecto anterior', async () => {
   assert.deepEqual(w.published, ['/projects/a', null])
 })
 
+
+
+test('reinicia el rango solo al cambiar la selección y conserva la sesión en refrescos concurrentes', async () => {
+  const w = worker()
+  await w.ready()
+  assert.deepEqual(w.historySelections, ['/projects/a'])
+  await Promise.all([w.command(), w.events.get('agent.status.changed')()])
+  assert.deepEqual(w.historySelections, ['/projects/a'])
+  w.select('/projects/b')
+  await w.command()
+  w.select('/projects/a')
+  await w.command()
+  assert.deepEqual(w.historySelections, ['/projects/a', '/projects/b', '/projects/a'])
+})

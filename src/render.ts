@@ -10,17 +10,18 @@ import React from 'react'
 import { renderToString } from 'react-dom/server'
 import { Panel } from './panel.js'
 import { script, styles } from 'panel-assets'
+import { consumeHistoryRequest, readHistory, storedHistory, resetHistory, HISTORY_PAGE, HISTORY_MAX, type HistoryState } from './history.js'
 import { PALETTE } from './graph-style.js'
 import { layout } from './graph-layout.js'
 
 export { layout } from './graph-layout.js'
+export { resetHistory } from './history.js'
 import type { Change, Commit, GitCommit, GroupedRefs, LocalRef, PanelData, RenderOptions, WorkingCommit } from './types.js'
 
 const run = promisify(execFile)
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const PANEL_PATH = join(HERE, 'panel.html')
 
-const LIMIT = 250
 const LOG_FORMAT = '%H%x1f%P%x1f%D%x1f%s%x1f%an%x1f%at%x1f%ae%x1f%B%x1e'
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 const two = (n: number) => String(n).padStart(2, '0')
@@ -28,7 +29,7 @@ export const formatDate = (d: Date): string =>
   `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}`
 
 async function git(repo: string, args: string[]): Promise<string> {
-  const { stdout } = await run('git', args, { cwd: repo, maxBuffer: 64 * 1024 * 1024, windowsHide: true })
+  const { stdout } = await run('git', args, { cwd: repo, maxBuffer: 16 * 1024 * 1024, timeout: 15000, windowsHide: true })
   return stdout
 }
 
@@ -134,7 +135,7 @@ export function groupRefs(refs: string[], remotes: string[] = []): GroupedRefs {
   return { heads, remotes: loose, tags }
 }
 
-export function renderHtml({ repo, branch, head, rows, remotes = [], now = null, error, loading = false }: RenderOptions): string {
+export function renderHtml({ repo, branch, head, rows, remotes = [], now = null, error, loading = false, history }: RenderOptions): string {
   const refsByCommit = Object.fromEntries(rows.map(row => {
     const laneColor = PALETTE[row.col % PALETTE.length]
     const refs = groupRefs(row.commit.refs, remotes)
@@ -158,6 +159,7 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
     now: now ? now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '',
     error: error || '',
     loading,
+    history,
   }
   const app = renderToString(React.createElement(Panel, payload))
   const serialized = JSON.stringify(payload)
@@ -181,11 +183,11 @@ export function renderHtml({ repo, branch, head, rows, remotes = [], now = null,
 </html>`
 }
 // Devuelve el HTML del repo; no escribe nada.
-export async function buildPanel(repo: string): Promise<string> {
+export async function buildPanel(repo: string, historyState?: HistoryState): Promise<string> {
   const now = new Date()
   try {
     const [stashLog, head, branch, status, remotes] = await Promise.all([
-      git(repo, ['stash', 'list', `--format=%gd%x1f${LOG_FORMAT}`]),
+      git(repo, ['stash', 'list', '-n251', `--format=%gd%x1f${LOG_FORMAT}`]),
       git(repo, ['rev-parse', 'HEAD']),
       git(repo, ['branch', '--show-current']),
       // sin --no-optional-locks, status refresca el índice y puede chocar
@@ -193,10 +195,23 @@ export async function buildPanel(repo: string): Promise<string> {
       git(repo, ['--no-optional-locks', 'status', '--porcelain=v1', '-z']).catch(() => ''),
       git(repo, ['remote']).catch(() => ''),
     ])
-    const stashes = parseStashes(stashLog)
+    const parsedStashes = parseStashes(stashLog)
+    const stashes = parsedStashes.slice(0, HISTORY_PAGE)
     const bases = [...new Set(stashes.flatMap(stash => stash.parents))]
-    const log = await git(repo, ['log', '--branches', '--remotes', '--tags', 'HEAD', ...bases, '--date-order', `-n${LIMIT}`, `--format=${LOG_FORMAT}`])
-    const commits: Commit[] = withStashes(parseLog(log), stashes)
+    const limit = historyState?.limit ?? HISTORY_PAGE
+    const log = await git(repo, ['log', '--branches', '--remotes', '--tags', 'HEAD', ...bases, '--date-order', `-n${limit + 1}`, `--format=${LOG_FORMAT}`])
+    const parsed = parseLog(log)
+    const history = parsed.slice(0, limit)
+    const hashes = new Set(history.map(commit => commit.hash))
+    const targets = [...new Set(historyState?.targets ?? [])].filter(target => !hashes.has(target))
+    if (targets.length) {
+      const parents = parseLog(await git(repo, ['log', '--no-walk=unsorted', '--ignore-missing', `--format=${LOG_FORMAT}`, ...targets]))
+      for (const parent of parents) {
+        if (!hashes.has(parent.hash)) { history.push(parent); hashes.add(parent.hash) }
+      }
+    }
+    const missingParent = targets.some(target => !hashes.has(target))
+    const commits: Commit[] = withStashes(history, stashes)
     const changes = parseStatus(status)
     if (changes.length) commits.unshift(wipCommit(changes, head.trim()))
     return renderHtml({
@@ -206,6 +221,15 @@ export async function buildPanel(repo: string): Promise<string> {
       rows: layout(commits),
       remotes: remotes.split('\n').map(r => r.trim()).filter(Boolean),
       now,
+      history: {
+        session: historyState?.session ?? '', limit, count: history.length,
+        incomplete: parsed.length > limit || history.some(commit => commit.parents.some(parent => !hashes.has(parent))),
+        capped: limit >= HISTORY_MAX, focus: historyState?.focus,
+        notice: [
+          missingParent ? 'Algún padre solicitado no está disponible en Git local. Puede tratarse de un clon superficial; descarga su historial para recorrerlo.' : '',
+          parsedStashes.length > HISTORY_PAGE ? 'Solo se muestran los 250 stashes más recientes.' : '',
+        ].filter(Boolean).join(' ') || undefined,
+      },
     })
   } catch (e) {
     return renderHtml({ repo, branch: '', head: '', rows: [], now, error: (e instanceof Error ? ('stderr' in e && typeof e.stderr === 'string' ? e.stderr : e.message) : String(e)).trim() })
@@ -223,17 +247,24 @@ export function panelFingerprint(html: string): string {
       return open + JSON.stringify(payload) + close
     })
 }
-export async function writePanel(repo: string, isCurrent: () => Promise<boolean> = async () => true): Promise<boolean> {
+export async function writePanel(repo: string, isCurrent?: () => Promise<boolean>, processHistoryRequest = false): Promise<boolean> {
+  const guard = isCurrent ?? (async () => true)
+  if (!await guard()) return false
+  if (!isCurrent && (await storedHistory())?.repo !== repo) await resetHistory(repo)
   await hideGeneratedPanelFromGit()
-  const html = await buildPanel(repo)
+  const state = await (processHistoryRequest ? consumeHistoryRequest(repo) : readHistory(repo))
+  const html = await buildPanel(repo, state)
   const current = await readFile(PANEL_PATH, 'utf8').catch(() => '')
   if (panelFingerprint(current) === panelFingerprint(html)) return false
-  if (!await isCurrent()) return false
+  if (!await guard()) return false
+  const latest = await storedHistory()
+  if (!latest || latest.session !== state.session || latest.limit !== state.limit || JSON.stringify(latest.targets) !== JSON.stringify(state.targets)) return false
   await writeFile(PANEL_PATH, html)
   return true
 }
 
 export async function resetPanel(): Promise<void> {
+  await resetHistory()
   await hideGeneratedPanelFromGit()
   await writeFile(PANEL_PATH, renderHtml({ repo: '', branch: '', head: '', rows: [] }))
 }
