@@ -1,21 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
+import type { HistoryRequest } from './types.js'
 import { callHost } from './host.js'
 
 function isTerminal(item: unknown): item is { id: string } {
   return Boolean(item && typeof item === 'object' && 'id' in item && typeof item.id === 'string' && item.id.length)
 }
 
-export function repositoryCommand(module: string, repo: string, action: 'refresh' | 'fetch'): string {
-  if (!module || !repo || !['refresh', 'fetch'].includes(action)) throw new Error('Acción o repositorio inválido.')
-  const script = `import(${JSON.stringify(module)}).then(m => m.runRepositoryAction(${JSON.stringify(repo)}, ${JSON.stringify(action)})).then(() => console.log('Git Graph: acción completada.')).catch(e => { console.error(e.stderr ? e.stderr.toString() : e.message); process.exitCode = 1; })`
+export function repositoryCommand(module: string, repo: string, action: 'refresh' | 'fetch' | 'history', history?: HistoryRequest): string {
+  if (!module || !repo || !['refresh', 'fetch', 'history'].includes(action) || (action === 'history' && !history?.session)) throw new Error('Acción o repositorio inválido.')
+  const script = `import(${JSON.stringify(module)}).then(m => m.${action === 'history' ? 'runHistoryAction' : 'runRepositoryAction'}(${JSON.stringify(repo)}, ${JSON.stringify(action === 'history' ? history : action)})).then(() => console.log('Git Graph: acción completada.')).catch(e => { console.error(e.stderr ? e.stderr.toString() : e.message); process.exitCode = 1; })`
   const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(script)))
   const command = `node -e "eval(Buffer.from('${encoded}','base64').toString('utf8'))"`
   if (command.length > 4096) throw new Error('La ruta es demasiado larga para enviarla a Orca.')
   return command
 }
 
-export function RepositoryActionDialog({ action, repo, module, onClose, onNotice }: {
-  action: 'refresh' | 'fetch'
+export function RepositoryActionDialog({ action, repo, module, history, onClose, onNotice }: {
+  action: 'refresh' | 'fetch' | 'history'
+  history?: HistoryRequest
   repo: string
   module: string
   onClose(): void
@@ -26,7 +28,7 @@ export function RepositoryActionDialog({ action, repo, module, onClose, onNotice
   const [terminal, setTerminal] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const title = action === 'fetch' ? 'Fetch from remote' : 'Refrescar grafo'
+  const title = action === 'history' ? (history?.target ? 'Cargar padre' : 'Cargar anteriores') : action === 'fetch' ? 'Fetch from remote' : 'Refrescar grafo'
 
   useEffect(() => {
     let current = true
@@ -56,7 +58,7 @@ export function RepositoryActionDialog({ action, repo, module, onClose, onNotice
     setLoading(true)
     setError('')
     try {
-      const result = await callHost<unknown>('terminal.sendText', { terminalId: terminal, text: repositoryCommand(module, repo, action), enter: true })
+      const result = await callHost<unknown>('terminal.sendText', { terminalId: terminal, text: repositoryCommand(module, repo, action, history), enter: true })
       if (!result || typeof result !== 'object' || !('accepted' in result) || result.accepted !== true) throw new Error('La terminal no ha aceptado el comando.')
       onNotice('Comando enviado. Consulta el resultado en la terminal; el grafo se actualizará al terminar.')
       onClose()
@@ -73,7 +75,7 @@ export function RepositoryActionDialog({ action, repo, module, onClose, onNotice
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
   }}>
     <h2>{title}</h2>
-    <p>{action === 'fetch' ? 'Descarga commits y referencias de todos los remotos (git fetch --all).' : 'Vuelve a leer los commits, ramas y cambios del repositorio seleccionado.'}</p>
+    <p>{action === 'history' ? 'Solicita al worker otro bloque de 250 commits o el padre indicado, conservando los padres reales.' : action === 'fetch' ? 'Descarga commits y referencias de todos los remotos (git fetch --all).' : 'Vuelve a leer los commits, ramas y cambios del repositorio seleccionado.'}</p>
     <label>Terminal de shell<select ref={select} disabled={loading} value={terminal} onChange={event => setTerminal(event.target.value)}><option value="">Selecciona una terminal…</option>{terminals.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
     <p className="detail-muted">Elige una shell libre, sin un agente ni otro proceso ejecutándose. Requiere Node y Git en el PATH.</p>
     <p className="stash-repo">{repo}</p>

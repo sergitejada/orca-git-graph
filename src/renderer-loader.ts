@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
-type Renderer = Pick<typeof import('./render.js'), 'writePanel' | 'resetPanel' | 'writeLoadingPanel'>
+type Renderer = Pick<typeof import('./render.js'), 'writePanel' | 'resetPanel' | 'writeLoadingPanel' | 'resetHistory'>
 
 // Node cachea imports por URL. La revisión del contenido permite cargar el
 // renderizador recién compilado sin reiniciar el worker ni crear otro timer.

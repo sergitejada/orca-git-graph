@@ -21,6 +21,7 @@ export interface WorkerDependencies {
   writePanel: (repo: string, isCurrent: () => Promise<boolean>) => Promise<boolean>
   resetPanel: () => Promise<void>
   writeLoadingPanel: (repo?: string) => Promise<void>
+  prepareHistory?: (repo: string) => Promise<void>
   now: () => number
   setInterval: (handler: () => void, ms: number) => unknown
 }
@@ -29,10 +30,11 @@ export default function activate(orca: Orca, dependencies: WorkerDependencies = 
   readActiveRepo,
   writePanel: async (repo, isCurrent) => {
     const renderer = await loadRenderer()
-    return renderer.writePanel(repo, async () => await loadRenderer() === renderer && await isCurrent())
+    return renderer.writePanel(repo, async () => await loadRenderer() === renderer && await isCurrent(), true)
   },
   resetPanel: async () => (await loadRenderer()).resetPanel(),
   writeLoadingPanel: async repo => (await loadRenderer()).writeLoadingPanel(repo),
+  prepareHistory: async repo => { await (await loadRenderer()).resetHistory(repo) },
   now: Date.now, setInterval,
 }): void {
   let repo: string | null | undefined
@@ -64,6 +66,7 @@ export default function activate(orca: Orca, dependencies: WorkerDependencies = 
           if (selected === null) {
             if (selectionChanged) await dependencies.resetPanel()
           } else {
+            if (selectionChanged) await dependencies.prepareHistory?.(selected)
             if (selectionChanged && !initial) {
               await dependencies.writeLoadingPanel(selected)
               loading = true

@@ -193,3 +193,5 @@ tbody tr.selected td:not(.graph) { opacity: 1; }
 @media (max-width: 560px) { .author { display: none; } }
 @media (max-width: 440px) { .date { display: none; } }
 @media (max-width: 300px) { .hash { display: none; } }
+
+.history-scope { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px; font-size: 11px; color: var(--muted-foreground, #999); overflow-wrap: anywhere; }

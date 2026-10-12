@@ -6,13 +6,14 @@ import { CommitFiles } from './commit-files.js'
 interface DetailsProps {
   row: PanelRow
   loadedHashes: Set<string>
+  onLoadParent?(hash: string): void
   onClose(): void
   onJump(hash: string): void
   changesView: ChangesView
   onChangesView(view: ChangesView): void
 }
 
-export function Details({ row, loadedHashes, onClose, onJump, changesView, onChangesView }: DetailsProps) {
+export function Details({ row, loadedHashes, onClose, onJump, changesView, onChangesView, onLoadParent }: DetailsProps) {
   const { commit } = row
   const hashInput = useRef<HTMLInputElement>(null)
   const [copyMessage, setCopyMessage] = useState('')
@@ -47,6 +48,6 @@ export function Details({ row, loadedHashes, onClose, onJump, changesView, onCha
     </>}
     {commit.parents.length ? <div className="parents"><h4>{commit.parents.length > 1 ? `Padres (${commit.parents.length}) · merge` : 'Padre'}</h4>{commit.parents.map(parent => loadedHashes.has(parent)
       ? <button type="button" key={parent} title={`Ver commit padre ${parent}`} onClick={() => onJump(parent)}>{parent.slice(0, 8)}</button>
-      : <code key={parent} title={`${parent} · fuera del historial cargado`}>{parent.slice(0, 8)}</code>)}</div> : null}
+      : onLoadParent ? <button type="button" key={parent} title={`Cargar commit padre ${parent} · fuera del historial cargado`} onClick={() => onLoadParent(parent)}>{parent.slice(0, 8)} · Cargar padre</button> : <code key={parent} title={`${parent} · fuera del historial cargado`}>{parent.slice(0, 8)}</code>)}</div> : null}
   </aside>
 }

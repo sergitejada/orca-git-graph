@@ -96,6 +96,21 @@ export interface PanelData {
   error: string
   loading?: boolean
   unborn?: boolean
+  history?: HistoryInfo
+}
+
+export interface HistoryRequest {
+  session: string
+  limit: number
+  target?: string
+}
+
+export interface HistoryInfo extends HistoryRequest {
+  count: number
+  incomplete: boolean
+  capped: boolean
+  focus?: string
+  notice?: string
 }
 
 export interface RenderOptions {
@@ -108,5 +123,6 @@ export interface RenderOptions {
   now?: Date | null
   error?: string
   loading?: boolean
+  history?: HistoryInfo
   unborn?: boolean
 }
