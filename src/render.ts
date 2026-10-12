@@ -11,7 +11,10 @@ import { renderToString } from 'react-dom/server'
 import { Panel } from './panel.js'
 import { script, styles } from 'panel-assets'
 import { PALETTE } from './graph-style.js'
-import type { Change, Commit, GitCommit, GraphRow, GroupedRefs, LocalRef, PanelData, RenderOptions, WorkingCommit } from './types.js'
+import { layout } from './graph-layout.js'
+
+export { layout } from './graph-layout.js'
+import type { Change, Commit, GitCommit, GroupedRefs, LocalRef, PanelData, RenderOptions, WorkingCommit } from './types.js'
 
 const run = promisify(execFile)
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -105,50 +108,6 @@ export const wipCommit = (changes: Change[], head: string): WorkingCommit => ({
   author: '',
   date: null,
 })
-
-// Cada carril espera un hash. Un commit ocupa el carril que lo espera; los
-// demás que lo esperaban confluyen en él (joins) y cada padre extra abre o
-// reutiliza un carril (forks). Los carriles no se desplazan: las verticales
-// son rectas y solo confluencias y ramas llevan curva.
-export function layout(commits: Commit[]): GraphRow[] {
-  const lanes: (string | null)[] = []
-  const rows: GraphRow[] = []
-  const freeSlot = () => {
-    const i = lanes.indexOf(null)
-    if (i >= 0) return i
-    lanes.push(null)
-    return lanes.length - 1
-  }
-  for (const commit of commits) {
-    let col = lanes.indexOf(commit.hash)
-    const hasIncoming = col >= 0
-    if (col < 0) col = freeSlot()
-    const before = lanes.slice()
-    const joins: number[] = []
-    lanes.forEach((h, i) => {
-      if (i !== col && h === commit.hash) {
-        joins.push(i)
-        lanes[i] = null
-      }
-    })
-    const [first, ...rest] = commit.parents
-    lanes[col] = first ?? null
-    const forks: number[] = []
-    for (const parent of rest) {
-      const existing = lanes.indexOf(parent)
-      if (existing >= 0) forks.push(existing)
-      else {
-        const slot = freeSlot()
-        lanes[slot] = parent
-        forks.push(slot)
-      }
-    }
-    const after = lanes.slice()
-    while (lanes.length > 0 && lanes[lanes.length - 1] === null) lanes.pop()
-    rows.push({ commit, col, hasIncoming, before, after, joins, forks })
-  }
-  return rows
-}
 
 // Agrupa las refs de `git log %D` en ramas, remotas sueltas y tags.
 export function groupRefs(refs: string[], remotes: string[] = []): GroupedRefs {

@@ -6,6 +6,8 @@ import { Details } from './details.js'
 import { BranchSelector } from './branch-selector.js'
 import { StashMenu } from './stash-menu.js'
 import { RepositoryActionDialog } from './repository-action-dialog.js'
+import { defaultViewOptions, visibleHistory } from './view-options.js'
+import { ViewOptionsMenu } from './view-options-menu.js'
 
 const x = (lane: number) => PAD + lane * LANE
 const curve = (x1: number, y1: number, x2: number, y2: number) => {
@@ -141,7 +143,9 @@ export function Panel(data: PanelData) {
   return <LoadedPanel {...data} />
 }
 
-function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows, refsByCommit, now, error }: PanelData) {
+function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, rows: allRows, refsByCommit: allRefs, now, error }: PanelData) {
+  const [viewOptions, setViewOptions] = useState(defaultViewOptions)
+  const { rows, refsByCommit } = useMemo(() => visibleHistory(allRows, allRefs, head, viewOptions), [allRows, allRefs, head, viewOptions])
   const [repositoryAction, setRepositoryAction] = useState<'refresh' | 'fetch' | null>(null)
   const actionButton = useRef<HTMLButtonElement | null>(null)
   const [showSearch, setShowSearch] = useState(false)
@@ -216,17 +220,25 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
       <div className="header-actions">
         <button type="button" className="icon-button" aria-label="Fetch from remote" title="Fetch from remote" disabled={!repoPath || !actionModule} onClick={event => { actionButton.current = event.currentTarget; setRepositoryAction('fetch') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17H5a4 4 0 0 1-.5-8A6 6 0 0 1 16 7a5 5 0 0 1 3 10h-2M12 11v10m-4-4 4 4 4-4" /></svg></button>
         <button type="button" className="icon-button" aria-label="Refrescar grafo" title="Refrescar grafo" disabled={!repoPath || !actionModule} onClick={event => { actionButton.current = event.currentTarget; setRepositoryAction('refresh') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8a8 8 0 1 1-5-4M15 1v4h4" /></svg></button>
-        {rows.length ? <>
+        {allRows.length ? <>
           <button type="button" className="icon-button" aria-label="Ir a HEAD" title="Ir a HEAD" disabled={!loadedHashes.has(head)} onClick={() => selectHash(head)}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v3m0 14v3M2 12h3m14 0h3" /></svg></button>
           <button ref={searchButton} type="button" className="icon-button" aria-label="Abrir búsqueda" title="Buscar commits (/)" aria-expanded={showSearch} aria-controls="commit-search" onClick={() => { setShowSearch(true); searchInput.current?.focus() }}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5" /><path d="m16 16 6 6" /></svg></button>
+          <ViewOptionsMenu value={viewOptions} onChange={next => {
+            const nextRows = visibleHistory(allRows, allRefs, head, next).rows
+            setViewOptions(next)
+            if (filters.branch && !branchesOf(nextRows).includes(filters.branch)) setFilters({ ...filters, branch: '' })
+            if (selectedHash && !nextRows.some(row => row.commit.hash === selectedHash)) setSelectedHash(null)
+            if (!nextRows.some(row => row.commit.hash === focusHash)) setFocusHash(nextRows.some(row => row.commit.hash === head) ? head : nextRows[0]?.commit.hash || '')
+            setStashMenu(null)
+          }} />
           <button type="button" className="icon-button" aria-label="Filtros" title={filterCount ? `Filtros (${filterCount})` : 'Filtros'} aria-expanded={showFilters} aria-controls="history-filters" data-active={filterCount > 0 || undefined} onClick={() => setShowFilters(!showFilters)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18l-7 8v7l-4 2v-9Z" /></svg>{filterCount ? <span className="filter-indicator" aria-label={`${filterCount} filtros activos`} /> : null}</button>
         </> : null}
       </div>
     </header>
     {error ? <div className="error">{error}</div> : null}
     {notice ? <p className="stash-notice" role="status">{notice}</p> : null}
-    {!error && !rows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
-    {rows.length ? <>
+    {!error && !allRows.length ? <div className="hint">Esperando a saber qué worktree mostrar: arranca un agente en Orca o ejecuta <b>Git Graph: Refrescar</b> desde la paleta de comandos.</div> : null}
+    {allRows.length ? <>
       <div className="branch-toolbar"><BranchSelector branches={branches} value={filters.branch} onChange={branch => setFilters({ ...filters, branch })} /></div>
       {filtered ? <fieldset className="toolbar" aria-label="Explorar historial"><button type="button" onClick={() => setFilters(emptyFilters)}>Limpiar</button></fieldset> : null}
       {showSearch ? <div className="search-toolbar" id="commit-search"><input ref={searchInput} type="search" aria-label="Buscar commits" placeholder="Buscar mensaje, autor, hash… (/)" value={filters.query} onChange={event => setFilters({ ...filters, query: event.target.value })} /><button type="button" aria-label="Cerrar búsqueda" title="Cerrar búsqueda" onClick={() => { setShowSearch(false); setFilters({ ...filters, query: '' }); searchButton.current?.focus() }}>×</button></div> : null}
@@ -234,7 +246,6 @@ function LoadedPanel({ repo, repoPath = '', actionModule = '', branch, head, row
         <label>Autor<select aria-label="Filtrar por autor" value={filters.author} onChange={event => setFilters({ ...filters, author: event.target.value })}><option value="">Todos los autores</option>{authors.map(name => <option key={name} value={name}>{name}</option>)}</select></label>
         <label className="merge-filter"><input type="checkbox" checked={filters.mergesOnly} onChange={event => setFilters({ ...filters, mergesOnly: event.target.checked })} />Solo merges</label>
       </div> : null}
-      <div className="results-bar"><span role="status">{filtered ? `${matchingRows.length} coincidencias · contexto visible` : `${rows.length} filas`}</span><div><button type="button" aria-label="Coincidencia anterior" disabled={!matchingRows.length} onClick={() => navigate(-1)}>↑</button><button type="button" aria-label="Coincidencia siguiente" disabled={!matchingRows.length} onClick={() => navigate(1)}>↓</button></div></div>
       {filtered && !matchingRows.length ? <div className="hint no-matches">Sin coincidencias. Cambia la búsqueda o limpia los filtros.</div> : null}
       <div ref={workspace} className={`workspace${selected ? ' details-open' : ''}`} style={selected ? { gridTemplateRows: `minmax(0, ${100 - detailsHeight}fr) 8px minmax(0, ${detailsHeight}fr)` } : undefined}>
       <div className="graph-list"><table onKeyDown={tableKeyDown} aria-label="Historial de commits">

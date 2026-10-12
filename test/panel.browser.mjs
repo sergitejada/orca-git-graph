@@ -9,6 +9,134 @@ import { layout, renderHtml, wipCommit } from '../render.mjs'
 const csp = "default-src 'none'; connect-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
 const commit = (hash, parents, refs = []) => ({ hash, parents, refs, subject: `commit ${hash}`, author: 'Ana', date: new Date(2026, 0, 1, 10, 0) })
 
+test('los cambios sin confirmar muestran iconos y colores y alternan entre árbol y lista', { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 360, height: 720 } })
+    page.setDefaultTimeout(5000)
+    const errors = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    const changes = [
+      { x: ' ', y: 'M', path: 'src/panel.tsx' },
+      { x: 'A', y: ' ', path: 'src/nested/new.ts' },
+      { x: '?', y: '?', path: 'src/nested/<new & file>.ts' },
+      { x: 'D', y: ' ', path: 'removed.ts' },
+      { x: 'R', y: 'M', path: 'renamed.ts' },
+      { x: 'U', y: 'U', path: 'conflict.ts' },
+      { x: 'A', y: 'A', path: 'both-added.ts' },
+      { x: 'D', y: 'D', path: 'both-deleted.ts' },
+    ]
+    const html = renderHtml({ repo: '/repo', branch: 'main', head: 'a', rows: layout([wipCommit(changes, 'a'), commit('a', [])]) })
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="border:0;width:100%;height:700px"></iframe>')
+    await page.locator('#panel').evaluate((element, srcdoc) => { element.srcdoc = srcdoc }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${html}`)
+    const frame = page.frameLocator('#panel')
+    await frame.locator('tr[data-hash="WORKING_TREE"]').click()
+    assert.equal(await frame.getByRole('button', { name: 'Ver como árbol' }).getAttribute('aria-pressed'), 'true')
+    assert.equal(await frame.locator('.change-file .change-icon').count(), changes.length)
+    assert.equal(await frame.locator('.changes-list code').count(), 0)
+    assert.equal(await frame.locator('.changes-list').getByText('panel.tsx', { exact: true }).count(), 1)
+    const expected = [
+      ['src/panel.tsx', 'Modificado', 'modified', 'rgb(255, 204, 128)'],
+      ['src/nested/new.ts', 'Añadido', 'added', 'rgb(129, 199, 132)'],
+      ['src/nested/<new & file>.ts', 'Sin seguimiento', 'untracked', 'rgb(129, 199, 132)'],
+      ['removed.ts', 'Eliminado', 'deleted', 'rgb(229, 115, 115)'],
+      ['renamed.ts', 'Renombrado', 'renamed', 'rgb(128, 203, 196)'],
+      ['conflict.ts', 'Conflicto', 'conflict', 'rgb(239, 154, 154)'],
+      ['both-added.ts', 'Conflicto', 'conflict', 'rgb(239, 154, 154)'],
+      ['both-deleted.ts', 'Conflicto', 'conflict', 'rgb(239, 154, 154)'],
+    ]
+    for (const [path, state, kind, color] of expected) {
+      const file = frame.getByTitle(`${path} · ${state}`, { exact: true })
+      assert.equal(await file.getAttribute('title'), `${path} · ${state}`)
+      assert.equal(await file.locator(`.change-${kind}`).evaluate(element => getComputedStyle(element).color), color)
+    }
+    const folder = frame.locator('summary').filter({ hasText: /^src$/ })
+    await folder.focus()
+    await folder.press('Enter')
+    assert.equal(await frame.getByText('panel.tsx', { exact: true }).isVisible(), false)
+    await folder.press('Enter')
+    await frame.getByRole('button', { name: 'Ver como lista' }).focus()
+    await frame.getByRole('button', { name: 'Ver como lista' }).press('Enter')
+    assert.equal(await frame.locator('.changes-list summary').count(), 0)
+    assert.equal(await frame.getByText('src/nested/<new & file>.ts', { exact: true }).isVisible(), true)
+    assert.equal(await frame.getByRole('button', { name: 'Ver como lista' }).getAttribute('aria-pressed'), 'true')
+    await frame.getByRole('button', { name: 'Ver como árbol' }).click()
+    await frame.getByRole('separator', { name: 'Ajustar altura de los detalles' }).press('End')
+    assert.equal(await frame.locator('body').evaluate(element => element.scrollWidth <= document.documentElement.clientWidth), true)
+    await mkdir('test-artifacts', { recursive: true })
+    await page.screenshot({ path: 'test-artifacts/uncommitted-changes-tree.png' })
+    await frame.locator('tr[data-hash="a"]').click()
+    assert.equal(await frame.getByRole('group', { name: 'Vista de los cambios sin confirmar' }).count(), 0)
+    await frame.getByLabel('Hash completo').waitFor()
+    assert.deepEqual(errors, [])
+  } finally { await browser.close() }
+})
+
+test('las opciones del grafo ocultan remotas y stashes y funcionan con teclado en la sidebar estrecha', { timeout: 30000 }, async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true })
+  try {
+    const page = await browser.newPage({ viewport: { width: 360, height: 600 } })
+    page.setDefaultTimeout(5000)
+    const errors = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+    const history = [{ ...commit('s', ['b']), stash: 'stash@{0}' }, commit('r', ['b'], ['origin/topic']), commit('a', ['b'], ['HEAD -> main', 'origin/main']), commit('b', [])]
+    const html = renderHtml({ repo: '/repo', branch: 'main', head: 'a', remotes: ['origin'], rows: layout(history) })
+    await page.setContent('<iframe id="panel" sandbox="allow-scripts" style="border:0;width:100%;height:580px"></iframe>')
+    await page.locator('#panel').evaluate((element, srcdoc) => { element.srcdoc = srcdoc }, `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head>${html}`)
+    const frame = page.frameLocator('#panel')
+    const options = frame.getByRole('button', { name: 'Opciones del grafo', exact: true })
+    await frame.getByLabel('Filtrar por rama').click()
+    await frame.getByRole('option', { name: 'origin/topic', exact: true }).click()
+    await options.press('ArrowDown')
+    const remote = frame.getByRole('menuitemcheckbox', { name: 'Mostrar ramas remotas', exact: true })
+    const stashes = frame.getByRole('menuitemcheckbox', { name: 'Mostrar stashes', exact: true })
+    await remote.waitFor()
+    assert.equal(await remote.getAttribute('aria-checked'), 'true')
+    assert.equal(await stashes.getAttribute('aria-checked'), 'true')
+    assert.equal(await remote.evaluate(element => element === document.activeElement), true)
+    await remote.press('Enter')
+    await frame.locator('tr[data-hash="r"]').waitFor({ state: 'detached' })
+    assert.equal(await frame.locator('tbody tr').count(), 3)
+    assert.equal(await frame.locator('.ref .remote').count(), 0)
+    assert.equal(await frame.getByLabel('Filtrar por rama').innerText(), 'Todas las ramas\n▾')
+    await remote.press('ArrowDown')
+    assert.equal(await stashes.evaluate(element => element === document.activeElement), true)
+    await stashes.press('Escape')
+    assert.equal(await frame.getByRole('menu', { name: 'Opciones del grafo' }).count(), 0)
+    assert.equal(await options.evaluate(element => element === document.activeElement), true)
+    await frame.getByLabel('Filtrar por rama').click()
+    assert.deepEqual(await frame.getByRole('option').allTextContents(), ['✓Todas las ramas', 'main'])
+    await frame.getByLabel('Buscar ramas').press('Escape')
+    await frame.locator('tr[data-hash="s"]').click()
+    await frame.getByRole('heading', { name: 'Stash stash@{0}', exact: true }).waitFor()
+    await options.click()
+    await stashes.click()
+    await frame.locator('tr[data-hash="s"]').waitFor({ state: 'detached' })
+    assert.equal(await frame.locator('.details').count(), 0)
+    assert.equal(await frame.locator('tbody tr').count(), 2)
+    assert.equal(await remote.getAttribute('aria-checked'), 'false')
+    assert.equal(await stashes.getAttribute('aria-checked'), 'false')
+    await remote.click()
+    await frame.locator('tr[data-hash="r"]').waitFor()
+    await stashes.click()
+    await frame.locator('tr[data-hash="s"]').waitFor()
+    assert.equal(await frame.locator('tbody tr').count(), 4)
+    await remote.press('Escape')
+    await page.setViewportSize({ width: 200, height: 600 })
+    await options.click()
+    const rect = await frame.getByRole('menu', { name: 'Opciones del grafo' }).boundingBox()
+    assert.ok(rect.x >= 0 && rect.x + rect.width <= 200)
+    assert.equal(await frame.locator('body').evaluate(element => element.scrollWidth <= document.documentElement.clientWidth), true)
+    await mkdir('test-artifacts', { recursive: true })
+    await page.screenshot({ path: 'test-artifacts/view-options.png' })
+    await frame.locator('header .label').first().click()
+    assert.equal(await frame.getByRole('menu', { name: 'Opciones del grafo' }).count(), 0)
+    assert.deepEqual(errors, [])
+  } finally { await browser.close() }
+})
+
 test('refresh y fetch piden una terminal y validan las respuestas del bridge', { timeout: 30000 }, async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true })
   try {
@@ -158,7 +286,7 @@ test('los stashes muestran etiqueta, se buscan y abren detalles con navegación 
     await frame.getByRole('menuitem').first().press('Escape')
     await frame.getByRole('button', { name: 'Abrir búsqueda' }).click()
     await frame.getByLabel('Buscar commits').fill('stash@{0}')
-    await frame.getByRole('status').getByText('1 coincidencias · contexto visible').waitFor()
+    await frame.locator('tr[data-hash="a"].dimmed').waitFor()
     await frame.locator('tr[data-hash="s"]').click()
     assert.equal(await frame.getByRole('menu').count(), 0)
     await frame.locator('.ref.stash').click()
@@ -306,7 +434,7 @@ test('React se hidrata y mantiene estilos en el iframe aislado de Orca', { timeo
     await frame.getByLabel('Buscar ramas').fill('FEAT')
     await frame.getByLabel('Buscar ramas').press('ArrowDown')
     await frame.getByLabel('Buscar ramas').press('Enter')
-    await frame.getByText('2 coincidencias · contexto visible', { exact: true }).waitFor()
+    await frame.locator('tr[data-hash="a"].dimmed').waitFor()
     await frame.getByLabel('Filtrar por rama').click()
     assert.equal(await frame.getByRole('listbox').getByRole('option', { name: 'feature', exact: true }).getAttribute('aria-selected'), 'true')
     await frame.getByRole('option', { name: 'Todas las ramas', exact: true }).click()
@@ -354,7 +482,10 @@ test('búsqueda, filtros, detalles y navegación funcionan sin romper el grafo',
     await frame.getByRole('button', { name: 'Abrir búsqueda' }).click()
     assert.equal(await frame.getByLabel('Buscar commits').evaluate(element => element === document.activeElement), true)
     await frame.getByLabel('Buscar commits').fill('Bob')
-    await frame.getByText('1 coincidencias · contexto visible', { exact: true }).waitFor()
+    await frame.locator('tbody tr.dimmed').nth(2).waitFor()
+    assert.equal(await frame.locator('.results-bar').count(), 0)
+    assert.equal(await frame.getByRole('button', { name: 'Coincidencia anterior' }).count(), 0)
+    assert.equal(await frame.getByRole('button', { name: 'Coincidencia siguiente' }).count(), 0)
     assert.equal(await frame.locator('tbody tr').count(), 4)
     assert.equal(await frame.locator('tbody tr.dimmed').count(), 3)
     await frame.getByRole('button', { name: 'Cerrar búsqueda' }).click()
@@ -363,7 +494,7 @@ test('búsqueda, filtros, detalles y navegación funcionan sin romper el grafo',
     assert.equal(await frame.locator('tbody tr.dimmed').count(), 0)
     await frame.getByRole('button', { name: 'Abrir búsqueda' }).press('/')
     await frame.getByLabel('Buscar commits').fill('Bob')
-    await frame.getByRole('button', { name: 'Coincidencia siguiente' }).click()
+    await frame.locator('tr[data-hash="a"]').press('ArrowDown')
     await frame.getByRole('complementary', { name: 'Detalles del commit' }).getByRole('heading', { name: 'Añadir explorador de commits', exact: true }).waitFor()
     assert.equal(await frame.locator('tr.selected').getAttribute('data-hash'), 'f')
 
@@ -373,12 +504,13 @@ test('búsqueda, filtros, detalles y navegación funcionan sin romper el grafo',
     await frame.getByLabel('Buscar ramas').fill('FEAT')
     assert.equal(await frame.getByRole('listbox').getByRole('option').count(), 2)
     await frame.getByRole('option', { name: 'feature', exact: true }).click()
-    await frame.getByText('2 coincidencias · contexto visible', { exact: true }).waitFor()
+    await frame.locator('tr[data-hash="a"].dimmed').waitFor()
     await frame.getByLabel('Filtrar por autor').selectOption('Bob')
-    await frame.getByText('1 coincidencias · contexto visible', { exact: true }).waitFor()
+    await frame.locator('tr[data-hash="b"].dimmed').waitFor()
     await frame.getByLabel('Solo merges').check()
     await frame.getByText('Sin coincidencias. Cambia la búsqueda o limpia los filtros.').waitFor()
-    assert.equal(await frame.getByRole('button', { name: 'Coincidencia siguiente' }).isEnabled(), false)
+    await frame.locator('tr.selected').press('ArrowDown')
+    assert.equal(await frame.locator('tr.selected').getAttribute('data-hash'), 'f')
     await frame.getByRole('button', { name: 'Limpiar', exact: true }).click()
     await frame.getByRole('button', { name: 'Ir a HEAD' }).click()
     assert.equal(await frame.getByLabel('Hash completo').inputValue(), 'a')
@@ -388,7 +520,7 @@ test('búsqueda, filtros, detalles y navegación funcionan sin romper el grafo',
     await frame.getByRole('button', { name: 'f', exact: true }).click()
     assert.equal(await frame.locator('tr.selected').getAttribute('data-hash'), 'f')
     await frame.locator('tr[data-hash="WORKING_TREE"]').click()
-    await frame.locator('.changes-list').getByText('src/details.tsx', { exact: true }).waitFor()
+    await frame.locator('.changes-list').getByText('details.tsx', { exact: true }).waitFor()
     await frame.locator('tr.selected').press('ArrowDown')
     assert.equal(await frame.locator('tr.selected').getAttribute('data-hash'), 'a')
     await frame.locator('tr.selected').press('/')
